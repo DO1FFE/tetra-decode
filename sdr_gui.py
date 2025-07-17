@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import threading
+import shutil
 from collections import deque
 import numpy as np
 from PyQt5 import QtWidgets, QtCore
@@ -194,6 +195,79 @@ class LEDIndicator(QtWidgets.QFrame):
         )
 
 
+class TetraDecoder(QtCore.QObject):
+    """Run osmocom-tetra tools and emit decoded output."""
+
+    output = QtCore.pyqtSignal(str)
+    finished = QtCore.pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._thread = None
+        self._running = threading.Event()
+        self._procs = []
+
+    def start(self, frequency: float):
+        """Start decoding pipeline for the given frequency."""
+        if self._thread and self._thread.is_alive():
+            return
+        self._running.set()
+        self._thread = threading.Thread(target=self._run, args=(frequency,), daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        """Stop decoding and terminate child processes."""
+        self._running.clear()
+        for p in self._procs:
+            if p and p.poll() is None:
+                p.terminate()
+        self._procs = []
+        if self._thread:
+            self._thread.join(timeout=1)
+            self._thread = None
+
+    def _run(self, frequency: float):
+        cmds = [
+            ["receiver1", "-f", str(int(frequency))],
+            ["demod_float"],
+            ["tetra-rx"],
+        ]
+
+        # Check all commands exist before starting
+        for cmd in cmds:
+            if not shutil.which(cmd[0]):
+                self.output.emit(f"{cmd[0]} not found in PATH")
+                self.finished.emit()
+                return
+
+        try:
+            p1 = subprocess.Popen(cmds[0], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p2 = subprocess.Popen(cmds[1], stdin=p1.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p1.stdout.close()
+            p3 = subprocess.Popen(
+                cmds[2],
+                stdin=p2.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            p2.stdout.close()
+            self._procs = [p1, p2, p3]
+        except Exception as exc:
+            self.output.emit(f"Failed to start decoder: {exc}")
+            self.finished.emit()
+            return
+
+        for line in p3.stdout:
+            if not self._running.is_set():
+                break
+            self.output.emit(line.rstrip())
+
+        self.stop()
+        self.finished.emit()
+
+
 class SpectrumCanvas(FigureCanvas):
     """Matplotlib canvas for spectrum display."""
 
@@ -255,6 +329,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.scanner = SDRScanner(device=self.device_box.currentText(), parent=self)
         self.player = AudioPlayer(device=self.device_box.currentText(), parent=self)
+        self.decoder = TetraDecoder(parent=self)
 
         self.agc_slider.valueChanged.connect(self._update_agc)
         self.start_btn.clicked.connect(self.start)
@@ -262,10 +337,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scanner.spectrum_ready.connect(self.canvas.update_spectrum)
         self.scanner.frequency_selected.connect(self.update_frequency)
 
+        self.decoder.output.connect(self._append_tetra)
+        self.decoder.finished.connect(self._decoder_finished)
+
+        self.tetra_start_btn.clicked.connect(self.start_decoding)
+        self.tetra_stop_btn.clicked.connect(self.stop_decoding)
+
         self.freq_history = deque(maxlen=10)
+        self.current_frequency = None
 
     def _build_tabs(self):
-        """Create the three main tabs."""
+        """Create the main tabs, including TETRA decoding."""
         # Tab 1: Spectrum & Control
         tab1 = QtWidgets.QWidget()
         ctl_layout = QtWidgets.QHBoxLayout()
@@ -304,9 +386,28 @@ class MainWindow(QtWidgets.QMainWindow):
         agc_layout.addWidget(self.agc_value)
         f3.addRow("AGC-Level:", agc_layout)
 
+        # Tab 4: TETRA decoding
+        tab4 = QtWidgets.QWidget()
+        v4 = QtWidgets.QVBoxLayout(tab4)
+        ctl4 = QtWidgets.QHBoxLayout()
+        self.tetra_start_btn = QtWidgets.QPushButton("Dekodierung starten")
+        self.tetra_start_btn.setEnabled(False)
+        self.tetra_stop_btn = QtWidgets.QPushButton("Stop")
+        self.tetra_stop_btn.setEnabled(False)
+        self.tetra_auto_cb = QtWidgets.QCheckBox("Automatisch nach Scan")
+        ctl4.addWidget(self.tetra_start_btn)
+        ctl4.addWidget(self.tetra_stop_btn)
+        ctl4.addWidget(self.tetra_auto_cb)
+        ctl4.addStretch()
+        v4.addLayout(ctl4)
+        self.tetra_output = QtWidgets.QPlainTextEdit()
+        self.tetra_output.setReadOnly(True)
+        v4.addWidget(self.tetra_output)
+
         self.tabs.addTab(tab1, "Spektrum & Steuerung")
         self.tabs.addTab(tab2, "Audio & Aktivit\u00e4t")
         self.tabs.addTab(tab3, "Einstellungen")
+        self.tabs.addTab(tab4, "TETRA-Dekodierung")
 
     def refresh_devices(self):
         """Populate device box with detected SDR devices."""
@@ -328,13 +429,37 @@ class MainWindow(QtWidgets.QMainWindow):
         self.freq_list.clear()
         for f in self.freq_history:
             self.freq_list.addItem(f"{f:.3f} MHz")
+        self.current_frequency = freq
         self.player.start(freq)
+        self.tetra_start_btn.setEnabled(True)
+        if self.tetra_auto_cb.isChecked():
+            self.start_decoding()
 
     @QtCore.pyqtSlot()
     def notify_activity(self):
         """Visual indicator when activity is detected."""
         self.activity_led.set_color("red")
         QtCore.QTimer.singleShot(500, lambda: self.activity_led.set_color("green"))
+
+    def start_decoding(self):
+        """Start TETRA decoding pipeline."""
+        if self.current_frequency is None:
+            return
+        self.tetra_start_btn.setEnabled(False)
+        self.tetra_stop_btn.setEnabled(True)
+        self.tetra_output.clear()
+        self.decoder.start(self.current_frequency)
+
+    def stop_decoding(self):
+        """Stop TETRA decoding."""
+        self.decoder.stop()
+
+    def _append_tetra(self, line: str):
+        self.tetra_output.appendPlainText(line)
+
+    def _decoder_finished(self):
+        self.tetra_start_btn.setEnabled(True)
+        self.tetra_stop_btn.setEnabled(False)
 
     def start(self):
         device = self.device_box.currentText()
@@ -351,6 +476,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.appendPlainText("Stopping")
         self.scanner.stop()
         self.player.stop()
+        self.stop_decoding()
 
 
 if __name__ == "__main__":
