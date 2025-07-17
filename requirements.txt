@@ -1,0 +1,4 @@
+PyQt5>=5.15
+matplotlib
+numpy
+pyaudio
