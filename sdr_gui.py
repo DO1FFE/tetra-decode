@@ -4,11 +4,27 @@ import subprocess
 import threading
 import shutil
 from collections import deque
+import logging
+from logging.handlers import TimedRotatingFileHandler
+from datetime import datetime
+import importlib
+import re
+
 import numpy as np
 from PyQt5 import QtWidgets, QtCore
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import pyaudio
+
+
+LOG_DIR = os.path.expanduser("~")
+logger = logging.getLogger("tetra")
+handler = TimedRotatingFileHandler(
+    os.path.join(LOG_DIR, "tetra.log"), when="midnight", backupCount=7, encoding="utf-8"
+)
+handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+logger.setLevel(logging.INFO)
+logger.addHandler(handler)
 
 
 def list_sdr_devices():
@@ -32,6 +48,61 @@ def list_sdr_devices():
         except Exception:
             pass
     return devices or ["RTL-SDR"]
+
+
+class SetupWorker(QtCore.QThread):
+    """Check for external tools and python modules and install them."""
+
+    log = QtCore.pyqtSignal(str)
+    finished = QtCore.pyqtSignal()
+
+    REQUIRED_CMDS = {
+        "receiver1": "osmocom-tetra",
+        "demod_float": "osmocom-tetra",
+        "tetra-rx": "osmocom-tetra",
+        "rtl_power": "rtl-sdr",
+        "rtl_fm": "rtl-sdr",
+        "rtl_test": "rtl-sdr",
+    }
+
+    PY_MODULES = ["pyaudio", "numpy", "matplotlib", "PyQt5"]
+
+    def run(self):
+        for cmd, pkg in self.REQUIRED_CMDS.items():
+            if not shutil.which(cmd):
+                self.log.emit(f"Installing {cmd} via apt ({pkg})")
+                if sys.platform.startswith("linux"):
+                    self._run_cmd(["sudo", "apt-get", "install", "-y", pkg])
+
+        for mod in self.PY_MODULES:
+            if not self._has_module(mod):
+                self.log.emit(f"Installing python module {mod}")
+                self._run_cmd([sys.executable, "-m", "pip", "install", mod])
+
+        setup_file = os.path.expanduser("~/.tetra_setup_done")
+        try:
+            with open(setup_file, "w"):
+                pass
+        except Exception:
+            pass
+        self.finished.emit()
+
+    def _has_module(self, name: str) -> bool:
+        try:
+            importlib.import_module(name)
+            return True
+        except Exception:
+            return False
+
+    def _run_cmd(self, cmd):
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for line in proc.stdout:
+                self.log.emit(line.rstrip())
+            proc.wait()
+        except Exception as exc:
+            self.log.emit(f"Failed to run {' '.join(cmd)}: {exc}")
+
 
 
 class SDRScanner(QtCore.QObject):
@@ -346,6 +417,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.freq_history = deque(maxlen=10)
         self.current_frequency = None
 
+        setup_file = os.path.expanduser("~/.tetra_setup_done")
+        if not os.path.exists(setup_file):
+            self.log.appendPlainText("Erster Start: Abh\u00e4ngigkeiten werden \u00fcberpr\u00fcft...")
+            self.setup_worker = SetupWorker()
+            self.setup_worker.log.connect(self.log.appendPlainText)
+            self.setup_worker.log.connect(logger.info)
+            self.setup_worker.finished.connect(lambda: self.log.appendPlainText("Setup abgeschlossen"))
+            self.setup_worker.start()
+
     def _build_tabs(self):
         """Create the main tabs, including TETRA decoding."""
         # Tab 1: Spectrum & Control
@@ -400,6 +480,9 @@ class MainWindow(QtWidgets.QMainWindow):
         ctl4.addWidget(self.tetra_auto_cb)
         ctl4.addStretch()
         v4.addLayout(ctl4)
+        self.filter_edit = QtWidgets.QLineEdit()
+        self.filter_edit.setPlaceholderText("Regex-Filter")
+        v4.addWidget(self.filter_edit)
         self.tetra_output = QtWidgets.QPlainTextEdit()
         self.tetra_output.setReadOnly(True)
         v4.addWidget(self.tetra_output)
@@ -455,7 +538,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.decoder.stop()
 
     def _append_tetra(self, line: str):
+        flt = self.filter_edit.text()
+        if flt:
+            try:
+                if not re.search(flt, line):
+                    return
+            except re.error:
+                pass
         self.tetra_output.appendPlainText(line)
+        logger.info(line)
 
     def _decoder_finished(self):
         self.tetra_start_btn.setEnabled(True)
