@@ -2,13 +2,35 @@ import os
 import sys
 import subprocess
 import threading
-import queue
+from collections import deque
 import numpy as np
 from PyQt5 import QtWidgets, QtCore
-from PyQt5.QtWidgets import QMessageBox
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import pyaudio
+
+
+def list_sdr_devices():
+    """Return a list of detected RTL-SDR devices."""
+    devices = []
+    try:
+        out = subprocess.check_output(["rtl_test", "-t"], text=True,
+                                      stderr=subprocess.STDOUT, timeout=5)
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("0:") or line.startswith("1:"):
+                devices.append(line)
+    except Exception:
+        pass
+    if not devices:
+        try:
+            out = subprocess.check_output(["lsusb"], text=True, timeout=5)
+            for line in out.splitlines():
+                if "RTL" in line or "Realtek" in line:
+                    devices.append(line.strip())
+        except Exception:
+            pass
+    return devices or ["RTL-SDR"]
 
 
 class SDRScanner(QtCore.QObject):
@@ -157,6 +179,21 @@ class AudioPlayer(QtCore.QObject):
         self.stop()
 
 
+class LEDIndicator(QtWidgets.QFrame):
+    """Simple colored LED indicator widget."""
+
+    def __init__(self, size=20, parent=None):
+        super().__init__(parent)
+        self._size = size
+        self.setFixedSize(size, size)
+        self.set_color("green")
+
+    def set_color(self, color: str):
+        self.setStyleSheet(
+            f"background-color: {color}; border-radius: {self._size // 2}px;"
+        )
+
+
 class SpectrumCanvas(FigureCanvas):
     """Matplotlib canvas for spectrum display."""
 
@@ -181,57 +218,134 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SDR Scanner")
-        self.resize(800, 600)
+        self.resize(900, 700)
 
-        self.device_box = QtWidgets.QComboBox()
-        self.device_box.addItems(["RTL-SDR", "HackRF", "LimeSDR"])
-
+        # Widgets common to multiple tabs
         self.start_btn = QtWidgets.QPushButton("Start")
         self.stop_btn = QtWidgets.QPushButton("Stop")
         self.freq_label = QtWidgets.QLabel("Freq: N/A")
+
+        self.canvas = SpectrumCanvas()
         self.log = QtWidgets.QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.canvas = SpectrumCanvas()
+        self.freq_list = QtWidgets.QListWidget()
 
-        top_layout = QtWidgets.QHBoxLayout()
-        top_layout.addWidget(self.device_box)
-        top_layout.addWidget(self.start_btn)
-        top_layout.addWidget(self.stop_btn)
-        top_layout.addWidget(self.freq_label)
+        self.activity_led = LEDIndicator()
 
-        main_layout = QtWidgets.QVBoxLayout()
-        main_layout.addLayout(top_layout)
-        main_layout.addWidget(self.canvas)
-        main_layout.addWidget(self.log)
+        self.device_box = QtWidgets.QComboBox()
+        self.refresh_devices()
+
+        self.freq_range_box = QtWidgets.QComboBox()
+        self.freq_range_box.addItem("380-385 MHz", (380e6, 385e6))
+        self.freq_range_box.addItem("410-420 MHz", (410e6, 420e6))
+        self.freq_range_box.addItem("420-430 MHz", (420e6, 430e6))
+
+        self.agc_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.agc_slider.setRange(5000, 20000)
+        self.agc_slider.setValue(10000)
+        self.agc_value = QtWidgets.QLabel(str(self.agc_slider.value()))
+
+        self.tabs = QtWidgets.QTabWidget()
+        self._build_tabs()
 
         central = QtWidgets.QWidget()
-        central.setLayout(main_layout)
+        lay = QtWidgets.QVBoxLayout(central)
+        lay.addWidget(self.tabs)
         self.setCentralWidget(central)
 
         self.scanner = SDRScanner(device=self.device_box.currentText(), parent=self)
         self.player = AudioPlayer(device=self.device_box.currentText(), parent=self)
 
+        self.agc_slider.valueChanged.connect(self._update_agc)
         self.start_btn.clicked.connect(self.start)
         self.stop_btn.clicked.connect(self.stop)
         self.scanner.spectrum_ready.connect(self.canvas.update_spectrum)
         self.scanner.frequency_selected.connect(self.update_frequency)
 
+        self.freq_history = deque(maxlen=10)
+
+    def _build_tabs(self):
+        """Create the three main tabs."""
+        # Tab 1: Spectrum & Control
+        tab1 = QtWidgets.QWidget()
+        ctl_layout = QtWidgets.QHBoxLayout()
+        ctl_layout.addWidget(self.start_btn)
+        ctl_layout.addWidget(self.stop_btn)
+        ctl_layout.addWidget(self.freq_label)
+
+        v1 = QtWidgets.QVBoxLayout(tab1)
+        v1.addLayout(ctl_layout)
+        v1.addWidget(self.canvas)
+        v1.addWidget(self.log)
+        v1.addWidget(QtWidgets.QLabel("Letzte Frequenzen:"))
+        v1.addWidget(self.freq_list)
+
+        # Tab 2: Audio & Activity
+        tab2 = QtWidgets.QWidget()
+        v2 = QtWidgets.QVBoxLayout(tab2)
+        h_led = QtWidgets.QHBoxLayout()
+        h_led.addWidget(QtWidgets.QLabel("Aktivit\u00e4t:"))
+        h_led.addWidget(self.activity_led)
+        h_led.addStretch()
+        v2.addLayout(h_led)
+
+        # Tab 3: Settings
+        tab3 = QtWidgets.QWidget()
+        f3 = QtWidgets.QFormLayout(tab3)
+        dev_layout = QtWidgets.QHBoxLayout()
+        dev_layout.addWidget(self.device_box)
+        refresh = QtWidgets.QPushButton("Neu suchen")
+        refresh.clicked.connect(self.refresh_devices)
+        dev_layout.addWidget(refresh)
+        f3.addRow("Ger\u00e4t:", dev_layout)
+        f3.addRow("Frequenzbereich:", self.freq_range_box)
+        agc_layout = QtWidgets.QHBoxLayout()
+        agc_layout.addWidget(self.agc_slider)
+        agc_layout.addWidget(self.agc_value)
+        f3.addRow("AGC-Level:", agc_layout)
+
+        self.tabs.addTab(tab1, "Spektrum & Steuerung")
+        self.tabs.addTab(tab2, "Audio & Aktivit\u00e4t")
+        self.tabs.addTab(tab3, "Einstellungen")
+
+    def refresh_devices(self):
+        """Populate device box with detected SDR devices."""
+        self.device_box.clear()
+        for dev in list_sdr_devices():
+            self.device_box.addItem(dev)
+
+    def _update_agc(self, value):
+        """Update AGC level from slider."""
+        self.agc_value.setText(str(value))
+        self.player.agc_level = value
+
     @QtCore.pyqtSlot(float)
     def update_frequency(self, freq):
+        """Handle new frequency selection."""
         self.freq_label.setText(f"Freq: {freq/1e6:.3f} MHz")
         self.log.appendPlainText(f"Selected frequency: {freq/1e6:.3f} MHz")
+        self.freq_history.appendleft(freq/1e6)
+        self.freq_list.clear()
+        for f in self.freq_history:
+            self.freq_list.addItem(f"{f:.3f} MHz")
         self.player.start(freq)
 
     @QtCore.pyqtSlot()
     def notify_activity(self):
-        QMessageBox.information(self, "Activity", "Signal detected")
+        """Visual indicator when activity is detected."""
+        self.activity_led.set_color("red")
+        QtCore.QTimer.singleShot(500, lambda: self.activity_led.set_color("green"))
 
     def start(self):
         device = self.device_box.currentText()
         self.scanner.device = device
         self.player.device = device
-        self.log.appendPlainText(f"Starting scan with {device}")
-        self.scanner.start()
+        rng = self.freq_range_box.currentData()
+        f_start, f_end = rng if rng else (380e6, 430e6)
+        self.log.appendPlainText(
+            f"Starting scan with {device} ({f_start/1e6:.0f}-{f_end/1e6:.0f} MHz)"
+        )
+        self.scanner.start(f_start, f_end)
 
     def stop(self):
         self.log.appendPlainText("Stopping")
