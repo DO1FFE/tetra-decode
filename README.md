@@ -10,6 +10,11 @@ It now also integrates the osmocom-tetra tools (`receiver1`, `demod_float`,
 The GUI shows a realtime spectrum, provides start/stop controls, and plays
 received audio through the speakers using PyAudio.
 
+Additional features include a scheduler for automatic scan/decoding cycles,
+cell information display with CSV export, basic packet statistics, Telegram
+notifications on activity, audio recording and spectrum snapshots. A light and
+dark theme can be selected in the settings tab.
+
 Run the application with:
 
 ```bash
