@@ -9,6 +9,18 @@ from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime
 import importlib
 import re
+import json
+import wave
+import time
+try:
+    import qdarkstyle
+except Exception:
+    qdarkstyle = None
+
+try:
+    import requests
+except Exception:
+    requests = None
 
 import numpy as np
 from PyQt5 import QtWidgets, QtCore
@@ -18,6 +30,7 @@ import pyaudio
 
 
 LOG_DIR = os.path.expanduser("~")
+CONFIG_FILE = os.path.expanduser("~/.tetra_gui_config.json")
 logger = logging.getLogger("tetra")
 handler = TimedRotatingFileHandler(
     os.path.join(LOG_DIR, "tetra.log"), when="midnight", backupCount=7, encoding="utf-8"
@@ -50,6 +63,24 @@ def list_sdr_devices():
     return devices or ["RTL-SDR"]
 
 
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as fh:
+                return json.load(fh)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_config(cfg: dict):
+    try:
+        with open(CONFIG_FILE, "w") as fh:
+            json.dump(cfg, fh, indent=2)
+    except Exception:
+        pass
+
+
 class SetupWorker(QtCore.QThread):
     """Check for external tools and python modules and install them."""
 
@@ -65,7 +96,7 @@ class SetupWorker(QtCore.QThread):
         "rtl_test": "rtl-sdr",
     }
 
-    PY_MODULES = ["pyaudio", "numpy", "matplotlib", "PyQt5"]
+    PY_MODULES = ["pyaudio", "numpy", "matplotlib", "PyQt5", "requests", "qdarkstyle"]
 
     def run(self):
         for cmd, pkg in self.REQUIRED_CMDS.items():
@@ -198,6 +229,8 @@ class AudioPlayer(QtCore.QObject):
         self.agc_level = 10000
         self.activity_threshold = 1000
         self.activity = QtCore.pyqtSignal()
+        self.record_file = None
+        self.record_last = 0
 
     def start(self, frequency):
         self.stop()
@@ -229,6 +262,9 @@ class AudioPlayer(QtCore.QObject):
             self._stream.stop_stream()
             self._stream.close()
             self._stream = None
+        if self.record_file:
+            self.record_file.close()
+            self.record_file = None
 
     def _play(self):
         if not self._process:
@@ -244,11 +280,36 @@ class AudioPlayer(QtCore.QObject):
                 gain = self.agc_level / level
                 audio = (audio * gain).astype(np.int16)
             if np.max(np.abs(audio)) > self.activity_threshold:
-                QtCore.QMetaObject.invokeMethod(self.parent(), "notify_activity",
-                                                QtCore.Qt.QueuedConnection)
+                QtCore.QMetaObject.invokeMethod(
+                    self.parent(), "notify_activity", QtCore.Qt.QueuedConnection
+                )
+                self._start_recording()
+            self._write_recording(audio)
             self._stream.write(audio.tobytes())
 
         self.stop()
+
+    def _start_recording(self):
+        if self.record_file:
+            self.record_last = time.time()
+            return
+        path = os.path.expanduser("~/TetraRecordings")
+        os.makedirs(path, exist_ok=True)
+        fname = datetime.now().strftime("rec_%Y%m%d_%H%M%S.wav")
+        self.record_file = wave.open(os.path.join(path, fname), "wb")
+        self.record_file.setnchannels(1)
+        self.record_file.setsampwidth(2)
+        self.record_file.setframerate(48000)
+        self.record_last = time.time()
+
+    def _write_recording(self, audio):
+        if self.record_file:
+            self.record_file.writeframes(audio.tobytes())
+            if time.time() - self.record_last > 2:
+                self.record_file.close()
+                self.record_file = None
+            else:
+                self.record_last = time.time()
 
 
 class LEDIndicator(QtWidgets.QFrame):
@@ -402,6 +463,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.player = AudioPlayer(device=self.device_box.currentText(), parent=self)
         self.decoder = TetraDecoder(parent=self)
 
+        # configuration
+        self.config = {
+            "theme": "light",
+            "telegram_token": "",
+            "telegram_chat": "",
+            "scheduler_interval": 15,
+            "scheduler_enabled": False,
+        }
+        self.config.update(load_config())
+
+        self.scheduler_timer = QtCore.QTimer(self)
+        self.scheduler_timer.timeout.connect(self.run_scheduled_cycle)
+
+        if self.config.get("theme") == "dark":
+            self.apply_theme("dark")
+
+        self.update_scheduler()
+
         self.agc_slider.valueChanged.connect(self._update_agc)
         self.start_btn.clicked.connect(self.start)
         self.stop_btn.clicked.connect(self.stop)
@@ -414,8 +493,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tetra_start_btn.clicked.connect(self.start_decoding)
         self.tetra_stop_btn.clicked.connect(self.stop_decoding)
 
+        self.theme_combo.currentTextChanged.connect(self.apply_theme)
+        self.scheduler_enable_cb.toggled.connect(self.update_scheduler)
+        self.scheduler_interval_spin.valueChanged.connect(self.update_scheduler)
+        self.export_cells_btn.clicked.connect(self.export_cells_csv)
+        self.token_edit.textChanged.connect(lambda t: self.config.__setitem__("telegram_token", t))
+        self.chat_edit.textChanged.connect(lambda t: self.config.__setitem__("telegram_chat", t))
+
         self.freq_history = deque(maxlen=10)
         self.current_frequency = None
+        self.cells = {}
+        self.packet_counts = {}
 
         setup_file = os.path.expanduser("~/.tetra_setup_done")
         if not os.path.exists(setup_file):
@@ -434,6 +522,8 @@ class MainWindow(QtWidgets.QMainWindow):
         ctl_layout.addWidget(self.start_btn)
         ctl_layout.addWidget(self.stop_btn)
         ctl_layout.addWidget(self.freq_label)
+        self.save_png_btn = QtWidgets.QPushButton("Spektrum als PNG speichern")
+        ctl_layout.addWidget(self.save_png_btn)
 
         v1 = QtWidgets.QVBoxLayout(tab1)
         v1.addLayout(ctl_layout)
@@ -441,6 +531,7 @@ class MainWindow(QtWidgets.QMainWindow):
         v1.addWidget(self.log)
         v1.addWidget(QtWidgets.QLabel("Letzte Frequenzen:"))
         v1.addWidget(self.freq_list)
+        self.save_png_btn.clicked.connect(self.save_spectrum_png)
 
         # Tab 2: Audio & Activity
         tab2 = QtWidgets.QWidget()
@@ -466,6 +557,27 @@ class MainWindow(QtWidgets.QMainWindow):
         agc_layout.addWidget(self.agc_value)
         f3.addRow("AGC-Level:", agc_layout)
 
+        self.theme_combo = QtWidgets.QComboBox()
+        self.theme_combo.addItems(["light", "dark"])
+        self.theme_combo.setCurrentText(self.config.get("theme", "light"))
+        f3.addRow("Theme:", self.theme_combo)
+
+        self.scheduler_enable_cb = QtWidgets.QCheckBox("Scheduler aktiv")
+        self.scheduler_enable_cb.setChecked(self.config.get("scheduler_enabled", False))
+        self.scheduler_interval_spin = QtWidgets.QSpinBox()
+        self.scheduler_interval_spin.setRange(1, 1440)
+        self.scheduler_interval_spin.setValue(self.config.get("scheduler_interval", 15))
+        sch_lay = QtWidgets.QHBoxLayout()
+        sch_lay.addWidget(self.scheduler_enable_cb)
+        sch_lay.addWidget(QtWidgets.QLabel("Intervall (min):"))
+        sch_lay.addWidget(self.scheduler_interval_spin)
+        f3.addRow("Scheduler:", sch_lay)
+
+        self.token_edit = QtWidgets.QLineEdit(self.config.get("telegram_token", ""))
+        self.chat_edit = QtWidgets.QLineEdit(self.config.get("telegram_chat", ""))
+        f3.addRow("Telegram Token:", self.token_edit)
+        f3.addRow("Chat-ID:", self.chat_edit)
+
         # Tab 4: TETRA decoding
         tab4 = QtWidgets.QWidget()
         v4 = QtWidgets.QVBoxLayout(tab4)
@@ -487,10 +599,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tetra_output.setReadOnly(True)
         v4.addWidget(self.tetra_output)
 
+        # Tab 5: Cells
+        tab5 = QtWidgets.QWidget()
+        v5 = QtWidgets.QVBoxLayout(tab5)
+        self.cell_table = QtWidgets.QTableWidget(0, 5)
+        self.cell_table.setHorizontalHeaderLabels(["Cell ID", "LAC", "MCC", "MNC", "Freq"])
+        v5.addWidget(self.cell_table)
+        self.export_cells_btn = QtWidgets.QPushButton("CSV Export")
+        v5.addWidget(self.export_cells_btn)
+
+        # Tab 6: Packet stats
+        tab6 = QtWidgets.QWidget()
+        v6 = QtWidgets.QVBoxLayout(tab6)
+        self.stats_canvas = FigureCanvas(Figure(figsize=(4,3)))
+        self.stats_ax = self.stats_canvas.figure.add_subplot(111)
+        v6.addWidget(self.stats_canvas)
+
         self.tabs.addTab(tab1, "Spektrum & Steuerung")
         self.tabs.addTab(tab2, "Audio & Aktivit\u00e4t")
         self.tabs.addTab(tab3, "Einstellungen")
         self.tabs.addTab(tab4, "TETRA-Dekodierung")
+        self.tabs.addTab(tab5, "Zellen")
+        self.tabs.addTab(tab6, "Statistik")
 
     def refresh_devices(self):
         """Populate device box with detected SDR devices."""
@@ -547,6 +677,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
         self.tetra_output.appendPlainText(line)
         logger.info(line)
+        self.parse_cell_info(line)
+        self.parse_packet_type(line)
 
     def _decoder_finished(self):
         self.tetra_start_btn.setEnabled(True)
@@ -568,6 +700,111 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scanner.stop()
         self.player.stop()
         self.stop_decoding()
+
+    def closeEvent(self, event):
+        save_config(self.config)
+        super().closeEvent(event)
+
+    # ----- Utility methods -----
+    def apply_theme(self, theme: str):
+        if theme == "dark" and qdarkstyle:
+            self.setStyleSheet(qdarkstyle.load_stylesheet_pyqt5())
+        else:
+            self.setStyleSheet("")
+        self.config["theme"] = theme
+
+    def save_spectrum_png(self):
+        path = os.path.expanduser("~/TetraScans")
+        os.makedirs(path, exist_ok=True)
+        fname = datetime.now().strftime("scan_%Y%m%d_%H%M%S.png")
+        self.canvas.fig.savefig(os.path.join(path, fname))
+        self.log.appendPlainText(f"Spektrum gespeichert: {fname}")
+
+    def run_scheduled_cycle(self):
+        self.start()
+        QtCore.QTimer.singleShot(5000, self._run_decode_phase)
+
+    def _run_decode_phase(self):
+        self.scanner.stop()
+        if self.current_frequency:
+            self.start_decoding()
+        QtCore.QTimer.singleShot(60000, self.stop)
+
+    def send_telegram(self, text: str):
+        token = self.token_edit.text().strip()
+        chat = self.chat_edit.text().strip()
+        if not token or not chat or not requests:
+            return
+        threading.Thread(
+            target=requests.post,
+            args=(f"https://api.telegram.org/bot{token}/sendMessage",),
+            kwargs={"data": {"chat_id": chat, "text": text}},
+            daemon=True,
+        ).start()
+
+    def update_cells(self, cell):
+        cid = cell.get("cell")
+        if not cid:
+            return
+        self.cells[cid] = cell
+        self.cell_table.setRowCount(len(self.cells))
+        for row, info in enumerate(self.cells.values()):
+            self.cell_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(info.get("cell", ""))))
+            self.cell_table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(info.get("lac", ""))))
+            self.cell_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(info.get("mcc", ""))))
+            self.cell_table.setItem(row, 3, QtWidgets.QTableWidgetItem(str(info.get("mnc", ""))))
+            self.cell_table.setItem(row, 4, QtWidgets.QTableWidgetItem(str(info.get("freq", ""))))
+
+    def update_stats(self):
+        self.stats_ax.clear()
+        types = list(self.packet_counts.keys())
+        vals = [self.packet_counts[t] for t in types]
+        self.stats_ax.bar(types, vals)
+        self.stats_canvas.draw()
+
+    def export_cells_csv(self):
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "CSV speichern", "cells.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        with open(path, "w") as fh:
+            fh.write("Cell,LAC,MCC,MNC,Freq\n")
+            for c in self.cells.values():
+                fh.write(f"{c.get('cell','')},{c.get('lac','')},{c.get('mcc','')},{c.get('mnc','')},{c.get('freq','')}\n")
+
+    def update_scheduler(self):
+        enabled = self.scheduler_enable_cb.isChecked()
+        interval = self.scheduler_interval_spin.value()
+        self.config["scheduler_enabled"] = enabled
+        self.config["scheduler_interval"] = interval
+        if enabled:
+            self.scheduler_timer.start(interval * 60 * 1000)
+        else:
+            self.scheduler_timer.stop()
+
+    def parse_cell_info(self, line: str):
+        m = re.search(r"Cell\s*ID[:=]\s*(\w+).*LAC[:=]\s*(\w+).*MCC[:=]\s*(\d+).*MNC[:=]\s*(\d+)", line, re.I)
+        if not m:
+            return
+        cell = {
+            "cell": m.group(1),
+            "lac": m.group(2),
+            "mcc": m.group(3),
+            "mnc": m.group(4),
+            "freq": f"{self.current_frequency/1e6:.3f}"
+        }
+        self.update_cells(cell)
+
+    def parse_packet_type(self, line: str):
+        types = ["SDS", "MM", "CM"]
+        for t in types:
+            if t in line:
+                self.packet_counts[t] = self.packet_counts.get(t, 0) + 1
+                self.update_stats()
+                self.send_telegram(
+                    f"TETRA-Aktivit\u00e4t auf {self.current_frequency/1e6:.4f} MHz: {t} empfangen"
+                )
+                break
+
 
 
 if __name__ == "__main__":
