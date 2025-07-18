@@ -12,6 +12,7 @@ import re
 import json
 import wave
 import time
+import tempfile
 try:
     import qdarkstyle
 except Exception:
@@ -327,10 +328,58 @@ class LEDIndicator(QtWidgets.QFrame):
         )
 
 
+class DecodedAudioPlayer(QtCore.QObject):
+    """Play decoded TETRA audio frames via PyAudio."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pa = pyaudio.PyAudio()
+        self._stream = None
+        self.record = False
+        self._wav = None
+
+    def start(self, record: bool = False):
+        self.stop()
+        self.record = record
+        self._stream = self._pa.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=8000,
+            output=True,
+            frames_per_buffer=1024,
+        )
+        if record:
+            path = os.path.expanduser("~/TetraVoice")
+            os.makedirs(path, exist_ok=True)
+            name = datetime.now().strftime("voice_%Y%m%d_%H%M%S.wav")
+            self._wav = wave.open(os.path.join(path, name), "wb")
+            self._wav.setnchannels(1)
+            self._wav.setsampwidth(2)
+            self._wav.setframerate(8000)
+
+    def stop(self):
+        if self._stream:
+            self._stream.stop_stream()
+            self._stream.close()
+            self._stream = None
+        if self._wav:
+            self._wav.close()
+            self._wav = None
+
+    def process(self, data: bytes):
+        if not self._stream:
+            return
+        self._stream.write(data)
+        if self._wav:
+            self._wav.writeframes(data)
+
+
 class TetraDecoder(QtCore.QObject):
     """Run osmocom-tetra tools and emit decoded output."""
 
     output = QtCore.pyqtSignal(str)
+    audio = QtCore.pyqtSignal(bytes)
+    encrypted = QtCore.pyqtSignal()
     finished = QtCore.pyqtSignal()
 
     def __init__(self, parent=None):
@@ -338,6 +387,7 @@ class TetraDecoder(QtCore.QObject):
         self._thread = None
         self._running = threading.Event()
         self._procs = []
+        self._fifo = os.path.join(tempfile.gettempdir(), "tetra_audio_fifo")
 
     def start(self, frequency: float):
         """Start decoding pipeline for the given frequency."""
@@ -362,7 +412,7 @@ class TetraDecoder(QtCore.QObject):
         cmds = [
             ["receiver1", "-f", str(int(frequency))],
             ["demod_float"],
-            ["tetra-rx"],
+            ["tetra-rx", "-a", self._fifo],
         ]
 
         # Check all commands exist before starting
@@ -373,6 +423,9 @@ class TetraDecoder(QtCore.QObject):
                 return
 
         try:
+            if os.path.exists(self._fifo):
+                os.remove(self._fifo)
+            os.mkfifo(self._fifo)
             p1 = subprocess.Popen(cmds[0], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             p2 = subprocess.Popen(cmds[1], stdin=p1.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             p1.stdout.close()
@@ -386,6 +439,8 @@ class TetraDecoder(QtCore.QObject):
             )
             p2.stdout.close()
             self._procs = [p1, p2, p3]
+            audio_thread = threading.Thread(target=self._read_audio, daemon=True)
+            audio_thread.start()
         except Exception as exc:
             self.output.emit(f"Failed to start decoder: {exc}")
             self.finished.emit()
@@ -394,10 +449,30 @@ class TetraDecoder(QtCore.QObject):
         for line in p3.stdout:
             if not self._running.is_set():
                 break
-            self.output.emit(line.rstrip())
+            txt = line.rstrip()
+            self.output.emit(txt)
+            if "CACH" in txt or "LIP" in txt:
+                QtCore.QMetaObject.invokeMethod(
+                    self, "encrypted", QtCore.Qt.QueuedConnection
+                )
 
         self.stop()
         self.finished.emit()
+
+    def _read_audio(self):
+        try:
+            with open(self._fifo, "rb") as fh:
+                while self._running.is_set():
+                    data = fh.read(320)
+                    if not data:
+                        time.sleep(0.05)
+                        continue
+                    self.audio.emit(data)
+        except Exception:
+            pass
+        finally:
+            if os.path.exists(self._fifo):
+                os.remove(self._fifo)
 
 
 class SpectrumCanvas(FigureCanvas):
@@ -472,6 +547,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scanner = SDRScanner(device=self.device_box.currentText(), parent=self)
         self.player = AudioPlayer(device=self.device_box.currentText(), parent=self)
         self.decoder = TetraDecoder(parent=self)
+        self.dec_audio_player = DecodedAudioPlayer(parent=self)
 
         self.scheduler_timer = QtCore.QTimer(self)
         self.scheduler_timer.timeout.connect(self.run_scheduled_cycle)
@@ -489,9 +565,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.decoder.output.connect(self._append_tetra)
         self.decoder.finished.connect(self._decoder_finished)
+        self.decoder.audio.connect(self.dec_audio_player.process)
+        self.decoder.encrypted.connect(self._encrypted_signal)
 
         self.tetra_start_btn.clicked.connect(self.start_decoding)
         self.tetra_stop_btn.clicked.connect(self.stop_decoding)
+        self.play_audio_cb.toggled.connect(self._toggle_dec_audio)
 
         self.theme_combo.currentTextChanged.connect(self.apply_theme)
         self.scheduler_enable_cb.toggled.connect(self.update_scheduler)
@@ -541,6 +620,10 @@ class MainWindow(QtWidgets.QMainWindow):
         h_led.addWidget(self.activity_led)
         h_led.addStretch()
         v2.addLayout(h_led)
+        self.play_audio_cb = QtWidgets.QCheckBox("Dekodiertes Audio wiedergeben")
+        self.record_audio_cb = QtWidgets.QCheckBox("als WAV speichern")
+        v2.addWidget(self.play_audio_cb)
+        v2.addWidget(self.record_audio_cb)
 
         # Tab 3: Settings
         tab3 = QtWidgets.QWidget()
@@ -661,11 +744,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tetra_start_btn.setEnabled(False)
         self.tetra_stop_btn.setEnabled(True)
         self.tetra_output.clear()
+        rec = self.record_audio_cb.isChecked()
+        if self.play_audio_cb.isChecked():
+            self.dec_audio_player.start(record=rec)
         self.decoder.start(self.current_frequency)
 
     def stop_decoding(self):
         """Stop TETRA decoding."""
         self.decoder.stop()
+        self.dec_audio_player.stop()
+
+    def _toggle_dec_audio(self, enabled: bool):
+        if enabled and self.decoder._running.is_set():
+            self.dec_audio_player.start(record=self.record_audio_cb.isChecked())
+        else:
+            self.dec_audio_player.stop()
+
+    def _encrypted_signal(self):
+        self.dec_audio_player.stop()
+        QtWidgets.QMessageBox.information(self, "Info", "Verschl\u00fcsseltes Signal erkannt")
 
     def _append_tetra(self, line: str):
         flt = self.filter_edit.text()
@@ -683,6 +780,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _decoder_finished(self):
         self.tetra_start_btn.setEnabled(True)
         self.tetra_stop_btn.setEnabled(False)
+        self.dec_audio_player.stop()
 
     def start(self):
         device = self.device_box.currentText()
