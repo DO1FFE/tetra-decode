@@ -61,3 +61,20 @@ External SDR utilities as well as the osmocom-tetra binaries must be installed a
 - **Theme selection** – switch between light and dark mode.
 - **Configuration and device selection** – detected SDR devices and most settings are stored in `~/.tetra_gui_config.json`.
 - **Setup assistant** – checks for required tools and Python modules and installs them when missing.
+
+## Windows-EXE erstellen
+
+Um das Programm unter Windows als Einzeldatei auszuführen, kannst du [PyInstaller](https://www.pyinstaller.org/) verwenden. Installiere zunächst Python 3 zusammen mit den Abhängigkeiten:
+
+```bash
+pip install -r requirements.txt
+pip install pyinstaller
+```
+
+Anschließend erzeugt folgender Befehl eine portable EXE-Datei:
+
+```bash
+pyinstaller --onefile --windowed sdr_gui.py
+```
+
+Die Datei `sdr_gui.exe` findest du danach im Ordner `dist`.
