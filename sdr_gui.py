@@ -451,6 +451,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.agc_slider.setValue(10000)
         self.agc_value = QtWidgets.QLabel(str(self.agc_slider.value()))
 
+        # configuration needs to be available during tab creation
+        self.config = {
+            "theme": "light",
+            "telegram_token": "",
+            "telegram_chat": "",
+            "scheduler_interval": 15,
+            "scheduler_enabled": False,
+        }
+        self.config.update(load_config())
+
         self.tabs = QtWidgets.QTabWidget()
         self._build_tabs()
 
@@ -462,16 +472,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scanner = SDRScanner(device=self.device_box.currentText(), parent=self)
         self.player = AudioPlayer(device=self.device_box.currentText(), parent=self)
         self.decoder = TetraDecoder(parent=self)
-
-        # configuration
-        self.config = {
-            "theme": "light",
-            "telegram_token": "",
-            "telegram_chat": "",
-            "scheduler_interval": 15,
-            "scheduler_enabled": False,
-        }
-        self.config.update(load_config())
 
         self.scheduler_timer = QtCore.QTimer(self)
         self.scheduler_timer.timeout.connect(self.run_scheduled_cycle)
