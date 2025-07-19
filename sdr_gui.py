@@ -143,9 +143,10 @@ class SDRScanner(QtCore.QObject):
     spectrum_ready = QtCore.pyqtSignal(np.ndarray, np.ndarray)
     frequency_selected = QtCore.pyqtSignal(float)
 
-    def __init__(self, device: str, parent=None):
+    def __init__(self, device: str, ppm: int = 0, parent=None):
         super().__init__(parent)
         self.device = device
+        self.ppm = ppm
         self._thread = None
         self._running = threading.Event()
         self._process = None
@@ -172,6 +173,7 @@ class SDRScanner(QtCore.QObject):
     def _scan(self, f_start, f_end, bin_size):
         cmd = [
             "rtl_power",
+            "-p", str(self.ppm),
             f"-f{f_start/1e6:.0f}M:{f_end/1e6:.0f}M:{int(bin_size)}",
             "-i", "1", "-"
         ]
@@ -221,9 +223,10 @@ class SDRScanner(QtCore.QObject):
 class AudioPlayer(QtCore.QObject):
     """Receive audio from rtl_fm and play it via PyAudio."""
 
-    def __init__(self, device: str, parent=None):
+    def __init__(self, device: str, ppm: int = 0, parent=None):
         super().__init__(parent)
         self.device = device
+        self.ppm = ppm
         self._process = None
         self._stream = None
         self._pa = pyaudio.PyAudio()
@@ -237,6 +240,7 @@ class AudioPlayer(QtCore.QObject):
         self.stop()
         cmd = [
             "rtl_fm",
+            "-p", str(self.ppm),
             "-f", str(int(frequency)),
             "-s", "48000",
             "-"
@@ -382,8 +386,9 @@ class TetraDecoder(QtCore.QObject):
     encrypted = QtCore.pyqtSignal()
     finished = QtCore.pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, ppm: int = 0, parent=None):
         super().__init__(parent)
+        self.ppm = ppm
         self._thread = None
         self._running = threading.Event()
         self._procs = []
@@ -410,7 +415,7 @@ class TetraDecoder(QtCore.QObject):
 
     def _run(self, frequency: float):
         cmds = [
-            ["receiver1", "-f", str(int(frequency))],
+            ["receiver1", "-f", str(int(frequency)), "-p", str(self.ppm)],
             ["demod_float"],
             ["tetra-rx", "-a", self._fifo],
         ]
@@ -502,8 +507,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(900, 700)
 
         # Widgets common to multiple tabs
-        self.start_btn = QtWidgets.QPushButton("Start")
-        self.stop_btn = QtWidgets.QPushButton("Stop")
+        self.start_btn = QtWidgets.QPushButton(
+            QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay),
+            "Start",
+        )
+        self.stop_btn = QtWidgets.QPushButton(
+            QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.SP_MediaStop),
+            "Stop",
+        )
         self.freq_label = QtWidgets.QLabel("Freq: N/A")
 
         self.canvas = SpectrumCanvas()
@@ -533,6 +544,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "telegram_chat": "",
             "scheduler_interval": 15,
             "scheduler_enabled": False,
+            "ppm": 0,
         }
         self.config.update(load_config())
 
@@ -544,9 +556,9 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(self.tabs)
         self.setCentralWidget(central)
 
-        self.scanner = SDRScanner(device=self.device_box.currentText(), parent=self)
-        self.player = AudioPlayer(device=self.device_box.currentText(), parent=self)
-        self.decoder = TetraDecoder(parent=self)
+        self.scanner = SDRScanner(device=self.device_box.currentText(), ppm=self.config.get("ppm", 0), parent=self)
+        self.player = AudioPlayer(device=self.device_box.currentText(), ppm=self.config.get("ppm", 0), parent=self)
+        self.decoder = TetraDecoder(ppm=self.config.get("ppm", 0), parent=self)
         self.dec_audio_player = DecodedAudioPlayer(parent=self)
 
         self.scheduler_timer = QtCore.QTimer(self)
@@ -558,6 +570,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_scheduler()
 
         self.agc_slider.valueChanged.connect(self._update_agc)
+        self.ppm_spin.valueChanged.connect(self._update_ppm)
         self.start_btn.clicked.connect(self.start)
         self.stop_btn.clicked.connect(self.stop)
         self.scanner.spectrum_ready.connect(self.canvas.update_spectrum)
@@ -578,6 +591,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.export_cells_btn.clicked.connect(self.export_cells_csv)
         self.token_edit.textChanged.connect(lambda t: self.config.__setitem__("telegram_token", t))
         self.chat_edit.textChanged.connect(lambda t: self.config.__setitem__("telegram_chat", t))
+
+        self._update_ppm(self.ppm_spin.value())
 
         self.freq_history = deque(maxlen=10)
         self.current_frequency = None
@@ -635,6 +650,10 @@ class MainWindow(QtWidgets.QMainWindow):
         dev_layout.addWidget(refresh)
         f3.addRow("Ger\u00e4t:", dev_layout)
         f3.addRow("Frequenzbereich:", self.freq_range_box)
+        self.ppm_spin = QtWidgets.QSpinBox()
+        self.ppm_spin.setRange(-100, 100)
+        self.ppm_spin.setValue(self.config.get("ppm", 0))
+        f3.addRow("PPM:", self.ppm_spin)
         agc_layout = QtWidgets.QHBoxLayout()
         agc_layout.addWidget(self.agc_slider)
         agc_layout.addWidget(self.agc_value)
@@ -665,9 +684,15 @@ class MainWindow(QtWidgets.QMainWindow):
         tab4 = QtWidgets.QWidget()
         v4 = QtWidgets.QVBoxLayout(tab4)
         ctl4 = QtWidgets.QHBoxLayout()
-        self.tetra_start_btn = QtWidgets.QPushButton("Dekodierung starten")
+        self.tetra_start_btn = QtWidgets.QPushButton(
+            QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay),
+            "Dekodierung starten",
+        )
         self.tetra_start_btn.setEnabled(False)
-        self.tetra_stop_btn = QtWidgets.QPushButton("Stop")
+        self.tetra_stop_btn = QtWidgets.QPushButton(
+            QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.SP_MediaStop),
+            "Stop",
+        )
         self.tetra_stop_btn.setEnabled(False)
         self.tetra_auto_cb = QtWidgets.QCheckBox("Automatisch nach Scan")
         ctl4.addWidget(self.tetra_start_btn)
@@ -716,6 +741,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.agc_value.setText(str(value))
         self.player.agc_level = value
 
+    def _update_ppm(self, value: int):
+        """Update PPM correction for all SDR commands."""
+        self.config["ppm"] = value
+        self.scanner.ppm = value
+        self.player.ppm = value
+        self.decoder.ppm = value
+
     @QtCore.pyqtSlot(float)
     def update_frequency(self, freq):
         """Handle new frequency selection."""
@@ -741,6 +773,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Start TETRA decoding pipeline."""
         if self.current_frequency is None:
             return
+        self._update_ppm(self.ppm_spin.value())
         self.tetra_start_btn.setEnabled(False)
         self.tetra_stop_btn.setEnabled(True)
         self.tetra_output.clear()
@@ -786,6 +819,7 @@ class MainWindow(QtWidgets.QMainWindow):
         device = self.device_box.currentText()
         self.scanner.device = device
         self.player.device = device
+        self._update_ppm(self.ppm_spin.value())
         rng = self.freq_range_box.currentData()
         f_start, f_end = rng if rng else (380e6, 430e6)
         self.log.appendPlainText(
@@ -907,6 +941,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
+    app.setStyle("Fusion")
     w = MainWindow()
     w.show()
     sys.exit(app.exec_())

@@ -28,6 +28,7 @@ Externe SDR-Werkzeuge sowie die osmocom-tetra-Binärdateien müssen installiert 
 - **Designauswahl** – Zwischen hellem und dunklem Modus umschalten.
 - **Konfiguration und Gerätauswahl** – Erkannte SDR-Geräte und die meisten Einstellungen werden in `~/.tetra_gui_config.json` abgelegt.
 - **Setup-Assistent** – Prüft benötigte Tools und Python-Module und installiert sie bei Bedarf.
+- **PPM-Korrektur** – Einstellbarer PPM-Wert für RTL-SDR wird an alle SDR-Werkzeuge übergeben.
 
 ---
 
@@ -61,6 +62,7 @@ External SDR utilities as well as the osmocom-tetra binaries must be installed a
 - **Theme selection** – switch between light and dark mode.
 - **Configuration and device selection** – detected SDR devices and most settings are stored in `~/.tetra_gui_config.json`.
 - **Setup assistant** – checks for required tools and Python modules and installs them when missing.
+- **PPM correction** – adjustable RTL-SDR PPM value applied to all SDR commands.
 
 ## Windows-EXE erstellen
 
