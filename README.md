@@ -30,6 +30,19 @@ Externe SDR-Werkzeuge sowie die osmocom-tetra-Binärdateien müssen installiert 
 - **Setup-Assistent** – Prüft benötigte Tools und Python-Module und installiert sie bei Bedarf.
 - **PPM-Korrektur** – Einstellbarer PPM-Wert für RTL-SDR wird an alle SDR-Werkzeuge übergeben.
 
+## Setup
+
+Unter Linux installierst du alle benötigten Pakete bequem über `setup.sh`:
+
+```bash
+./setup.sh
+```
+
+Auf Windows führst du stattdessen `setup.ps1` in einer PowerShell aus. Die SDR-Treiber sowie die osmocom-tetra Werkzeuge musst du dort separat installieren. Anschließend installierst du die Python-Abhängigkeiten mit:
+
+```powershell
+pip install -r requirements.txt
+```
 ---
 
 # TETRA Decode (English)
