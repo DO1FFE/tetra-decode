@@ -102,9 +102,11 @@ class SetupWorker(QtCore.QThread):
     def run(self):
         for cmd, pkg in self.REQUIRED_CMDS.items():
             if not shutil.which(cmd):
-                self.log.emit(f"Installing {cmd} via apt ({pkg})")
                 if sys.platform.startswith("linux"):
+                    self.log.emit(f"Installing {cmd} via apt ({pkg})")
                     self._run_cmd(["sudo", "apt-get", "install", "-y", pkg])
+                else:
+                    self.log.emit(f"{cmd} missing - please install {pkg} manually")
 
         for mod in self.PY_MODULES:
             if not self._has_module(mod):
@@ -393,6 +395,8 @@ class TetraDecoder(QtCore.QObject):
         self._running = threading.Event()
         self._procs = []
         self._fifo = os.path.join(tempfile.gettempdir(), "tetra_audio_fifo")
+        if os.name == "nt":
+            self._fifo += f"_{os.getpid()}.raw"
 
     def start(self, frequency: float):
         """Start decoding pipeline for the given frequency."""
@@ -430,7 +434,10 @@ class TetraDecoder(QtCore.QObject):
         try:
             if os.path.exists(self._fifo):
                 os.remove(self._fifo)
-            os.mkfifo(self._fifo)
+            if hasattr(os, "mkfifo"):
+                os.mkfifo(self._fifo)
+            else:
+                open(self._fifo, "wb").close()
             p1 = subprocess.Popen(cmds[0], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             p2 = subprocess.Popen(cmds[1], stdin=p1.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             p1.stdout.close()
