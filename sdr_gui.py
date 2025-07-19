@@ -105,6 +105,12 @@ class SetupWorker(QtCore.QThread):
                 if sys.platform.startswith("linux"):
                     self.log.emit(f"Installing {cmd} via apt ({pkg})")
                     self._run_cmd(["sudo", "apt-get", "install", "-y", pkg])
+                elif sys.platform.startswith("win"):
+                    if shutil.which("choco"):
+                        self.log.emit(f"Installing {cmd} via choco ({pkg})")
+                        self._run_cmd(["choco", "install", "-y", pkg])
+                    else:
+                        self.log.emit(f"{cmd} missing - please install {pkg} manually")
                 else:
                     self.log.emit(f"{cmd} missing - please install {pkg} manually")
 
@@ -112,6 +118,10 @@ class SetupWorker(QtCore.QThread):
             if not self._has_module(mod):
                 self.log.emit(f"Installing python module {mod}")
                 self._run_cmd([sys.executable, "-m", "pip", "install", mod])
+
+        if sys.platform.startswith("win") and shutil.which("choco") and not shutil.which("zadig"):
+            self.log.emit("Installing Zadig via choco")
+            self._run_cmd(["choco", "install", "-y", "zadig"])
 
         setup_file = os.path.expanduser("~/.tetra_setup_done")
         try:
