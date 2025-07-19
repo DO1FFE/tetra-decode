@@ -38,7 +38,7 @@ Unter Linux installierst du alle benötigten Pakete bequem über `setup.sh`:
 ./setup.sh
 ```
 
-Auf Windows führst du stattdessen `setup.ps1` in einer PowerShell aus. Wenn Chocolatey installiert ist, werden die SDR-Treiber und die osmocom-tetra Werkzeuge dabei automatisch eingerichtet. Andernfalls bekommst du einen Hinweis zur manuellen Installation. Anschließend werden die Python-Abhängigkeiten installiert:
+Auf Windows führst du stattdessen `setup.ps1` in einer PowerShell aus. Das Skript installiert nur die Python-Abhängigkeiten und, sofern Chocolatey vorhanden ist, das Treiber-Tool **Zadig**. Die eigentlichen rtl-sdr-Treiber und die osmocom-tetra-Werkzeuge müssen manuell eingerichtet werden, da es dafür keine Chocolatey-Pakete gibt:
 
 ```powershell
 pip install -r requirements.txt
