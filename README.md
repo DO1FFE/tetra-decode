@@ -32,16 +32,17 @@ Externe SDR-Werkzeuge sowie die osmocom-tetra-Binärdateien müssen installiert 
 
 ## Setup
 
-Unter Linux installierst du alle benötigten Pakete bequem über `setup.sh`:
+Unter Linux installierst du alle benötigten Pakete bequem über `setup.sh`. Das Skript erkennt automatisch gängige Paketmanager (APT, DNF, Pacman, Zypper), installiert die benötigten Bibliotheken und baut die osmocom-tetra-Werkzeuge bei Bedarf direkt aus den Quellen:
 
 ```bash
 ./setup.sh
 ```
 
-Auf Windows führst du stattdessen `setup.ps1` in einer PowerShell aus. Das Skript installiert nur die Python-Abhängigkeiten und, sofern Chocolatey vorhanden ist, das Treiber-Tool **Zadig**. Die eigentlichen rtl-sdr-Treiber und die osmocom-tetra-Werkzeuge müssen manuell eingerichtet werden, da es dafür keine Chocolatey-Pakete gibt:
+Auf Windows führst du stattdessen `setup.ps1` in einer administrativen PowerShell aus. Das Skript lädt fehlende Abhängigkeiten automatisch herunter, richtet die rtl-sdr-Hilfsprogramme sowie die osmocom-tetra-Binaries in `%ProgramData%\tetra-decode` ein und ergänzt den `PATH`. Chocolatey (wird bei Bedarf installiert) sorgt zusätzlich für Werkzeuge wie **Zadig** und SoX. Sollten einzelne Download-Quellen temporär nicht erreichbar sein, weist dich das Skript darauf hin und bietet die Möglichkeit zur manuellen Nachinstallation:
 
 ```powershell
-pip install -r requirements.txt
+Set-ExecutionPolicy Bypass -Scope Process -Force
+.\setup.ps1
 ```
 ---
 
@@ -60,6 +61,21 @@ python sdr_gui.py
 ```
 
 External SDR utilities as well as the osmocom-tetra binaries must be installed and accessible in the system path.
+
+## Setup
+
+On Linux you can run `setup.sh`. The helper detects common package managers (APT, DNF, Pacman, Zypper), installs all required development headers and, if necessary, builds the osmocom-tetra suite from source before pulling the Python dependencies:
+
+```bash
+./setup.sh
+```
+
+On Windows launch `setup.ps1` from an elevated PowerShell session. It bootstraps Chocolatey when required, downloads rtl-sdr utilities and the osmocom-tetra binaries into `%ProgramData%\tetra-decode`, amends the `PATH` accordingly and finally installs the Python packages. If any upstream download mirrors are temporarily unavailable the script reports the issue so you can provide the files manually:
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force
+.\setup.ps1
+```
 
 ## Features
 
