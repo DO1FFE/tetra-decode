@@ -38,11 +38,30 @@ Unter Linux installierst du alle benötigten Pakete bequem über `setup.sh`. Das
 ./setup.sh
 ```
 
+If you only need to top up missing components later on, `install.sh` performs a quick check and installs missing RTL-SDR or osmocom-tetra tools as well as the Python dependencies automatically:
+
+```bash
+./install.sh
+```
+
+Falls du einzelne Komponenten später nachrüsten musst, führt `install.sh` eine kompakte Prüfung aus und installiert fehlende RTL-SDR- oder osmocom-tetra-Werkzeuge sowie die Python-Abhängigkeiten automatisch nach:
+
+```bash
+./install.sh
+```
+
 Auf Windows führst du stattdessen `setup.ps1` in einer administrativen PowerShell aus. Das Skript lädt fehlende Abhängigkeiten automatisch herunter, richtet die rtl-sdr-Hilfsprogramme sowie die osmocom-tetra-Binaries in `%ProgramData%\tetra-decode` ein und ergänzt den `PATH`. Chocolatey (wird bei Bedarf installiert) sorgt zusätzlich für Werkzeuge wie **Zadig** und SoX. Sollten einzelne Download-Quellen temporär nicht erreichbar sein, weist dich das Skript darauf hin und bietet die Möglichkeit zur manuellen Nachinstallation:
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
-.\setup.ps1
+./setup.ps1
+```
+
+Für nachträgliche Ergänzungen steht außerdem `install.ps1` bereit. Das Skript erkennt fehlende Werkzeuge oder Python-Module und lädt sie – inklusive Chocolatey-Bootstrap – automatisch nach:
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force
+./install.ps1
 ```
 ---
 
@@ -75,6 +94,13 @@ On Windows launch `setup.ps1` from an elevated PowerShell session. It bootstraps
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
 .\setup.ps1
+```
+
+For follow-up installations there is also `install.ps1`. The helper detects missing tools or Python modules and downloads them automatically (including bootstrapping Chocolatey when necessary):
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force
+./install.ps1
 ```
 
 ## Features
