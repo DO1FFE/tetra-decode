@@ -30,6 +30,7 @@ from matplotlib.figure import Figure
 import pyaudio
 
 
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.expanduser("~")
 CONFIG_FILE = os.path.expanduser("~/.tetra_gui_config.json")
 logger = logging.getLogger("tetra")
@@ -99,31 +100,46 @@ class SetupWorker(QtCore.QThread):
 
     PY_MODULES = ["pyaudio", "numpy", "matplotlib", "PyQt5", "requests", "qdarkstyle"]
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._install_script_ran = False
+
     def run(self):
         for cmd, pkg in self.REQUIRED_CMDS.items():
-            if not shutil.which(cmd):
-                if sys.platform.startswith("linux"):
-                    self.log.emit(f"Installing {cmd} via apt ({pkg})")
-                    self._run_cmd(["sudo", "apt-get", "install", "-y", pkg])
-                elif sys.platform.startswith("win"):
-                    if pkg in ("rtl-sdr", "osmocom-tetra"):
-                        self.log.emit(f"{cmd} missing - please install {pkg} manually")
-                    elif shutil.which("choco"):
-                        self.log.emit(f"Installing {cmd} via choco ({pkg})")
-                        self._run_cmd(["choco", "install", "-y", pkg])
-                    else:
-                        self.log.emit(f"{cmd} missing - please install {pkg} manually")
+            if shutil.which(cmd):
+                continue
+            if self._run_install_script() and shutil.which(cmd):
+                continue
+            if sys.platform.startswith("linux"):
+                self.log.emit(f"Installing {cmd} via apt ({pkg})")
+                self._run_cmd(["sudo", "apt-get", "install", "-y", pkg])
+            elif sys.platform.startswith("win"):
+                if pkg in ("rtl-sdr", "osmocom-tetra"):
+                    if self._run_install_script() and shutil.which(cmd):
+                        continue
+                    self.log.emit(f"{cmd} missing - please install {pkg} manually")
+                elif shutil.which("choco"):
+                    self.log.emit(f"Installing {cmd} via choco ({pkg})")
+                    self._run_cmd(["choco", "install", "-y", pkg])
                 else:
                     self.log.emit(f"{cmd} missing - please install {pkg} manually")
+            else:
+                self.log.emit(f"{cmd} missing - please install {pkg} manually")
 
         for mod in self.PY_MODULES:
-            if not self._has_module(mod):
-                self.log.emit(f"Installing python module {mod}")
-                self._run_cmd([sys.executable, "-m", "pip", "install", mod])
+            if self._has_module(mod):
+                continue
+            if self._run_install_script() and self._has_module(mod):
+                continue
+            self.log.emit(f"Installing python module {mod}")
+            self._run_cmd([sys.executable, "-m", "pip", "install", mod])
 
         if sys.platform.startswith("win") and shutil.which("choco") and not shutil.which("zadig"):
-            self.log.emit("Installing Zadig via choco")
-            self._run_cmd(["choco", "install", "-y", "zadig"])
+            if self._run_install_script() and shutil.which("zadig"):
+                pass
+            else:
+                self.log.emit("Installing Zadig via choco")
+                self._run_cmd(["choco", "install", "-y", "zadig"])
 
 
         setup_file = os.path.expanduser("~/.tetra_setup_done")
@@ -149,6 +165,37 @@ class SetupWorker(QtCore.QThread):
             proc.wait()
         except Exception as exc:
             self.log.emit(f"Failed to run {' '.join(cmd)}: {exc}")
+
+    def _run_install_script(self) -> bool:
+        if self._install_script_ran:
+            return False
+
+        if sys.platform.startswith("linux"):
+            script = os.path.join(PROJECT_ROOT, "install.sh")
+            if not os.path.exists(script):
+                return False
+            self._install_script_ran = True
+            self.log.emit("Starte install.sh, um fehlende Abhängigkeiten zu installieren...")
+            self._run_cmd([script])
+            return True
+
+        if sys.platform.startswith("win"):
+            script = os.path.join(PROJECT_ROOT, "install.ps1")
+            if not os.path.exists(script):
+                return False
+            self._install_script_ran = True
+            self.log.emit("Starte install.ps1, um fehlende Abhängigkeiten zu installieren...")
+            self._run_cmd([
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                script,
+            ])
+            return True
+
+        return False
 
 
 
