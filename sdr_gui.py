@@ -104,6 +104,26 @@ class SetupWorker(QtCore.QThread):
         super().__init__(parent)
         self._install_script_ran = False
 
+    @classmethod
+    def detect_missing_requirements(cls):
+        """Return a tuple with missing commands, modules and optional tools."""
+        missing_cmds = [cmd for cmd in cls.REQUIRED_CMDS if not shutil.which(cmd)]
+        missing_mods = [mod for mod in cls.PY_MODULES if not cls._has_module(mod)]
+        missing_optional = []
+
+        if sys.platform.startswith("win") and shutil.which("choco") and not shutil.which("zadig"):
+            missing_optional.append("zadig")
+
+        return missing_cmds, missing_mods, missing_optional
+
+    @staticmethod
+    def _has_module(name: str) -> bool:
+        try:
+            importlib.import_module(name)
+            return True
+        except Exception:
+            return False
+
     def run(self):
         for cmd, pkg in self.REQUIRED_CMDS.items():
             if shutil.which(cmd):
@@ -141,7 +161,6 @@ class SetupWorker(QtCore.QThread):
                 self.log.emit("Installing Zadig via choco")
                 self._run_cmd(["choco", "install", "-y", "zadig"])
 
-
         setup_file = os.path.expanduser("~/.tetra_setup_done")
         try:
             with open(setup_file, "w"):
@@ -149,13 +168,6 @@ class SetupWorker(QtCore.QThread):
         except Exception:
             pass
         self.finished.emit()
-
-    def _has_module(self, name: str) -> bool:
-        try:
-            importlib.import_module(name)
-            return True
-        except Exception:
-            return False
 
     def _run_cmd(self, cmd):
         try:
@@ -666,14 +678,34 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cells = {}
         self.packet_counts = {}
 
-        setup_file = os.path.expanduser("~/.tetra_setup_done")
-        if not os.path.exists(setup_file):
-            self.log.appendPlainText("Erster Start: Abh\u00e4ngigkeiten werden \u00fcberpr\u00fcft...")
+        self.setup_worker = None
+        missing_cmds, missing_mods, missing_optional = SetupWorker.detect_missing_requirements()
+        if missing_cmds or missing_mods or missing_optional:
+            self.log.appendPlainText("Starte automatische Pr\u00fcfung der Zusatzprogramme...")
+            if missing_cmds:
+                self.log.appendPlainText(
+                    "Fehlende Programme: " + ", ".join(sorted(missing_cmds))
+                )
+            if missing_mods:
+                self.log.appendPlainText(
+                    "Fehlende Python-Module: " + ", ".join(sorted(missing_mods))
+                )
+            if missing_optional:
+                self.log.appendPlainText(
+                    "Fehlende Zusatzwerkzeuge: " + ", ".join(sorted(missing_optional))
+                )
+
             self.setup_worker = SetupWorker()
             self.setup_worker.log.connect(self.log.appendPlainText)
             self.setup_worker.log.connect(logger.info)
-            self.setup_worker.finished.connect(lambda: self.log.appendPlainText("Setup abgeschlossen"))
+            self.setup_worker.finished.connect(
+                lambda: self.log.appendPlainText("Setup abgeschlossen")
+            )
             self.setup_worker.start()
+        else:
+            self.log.appendPlainText(
+                "Alle ben\u00f6tigten Zusatzprogramme wurden bereits gefunden."
+            )
 
     def _build_tabs(self):
         """Create the main tabs, including TETRA decoding."""
