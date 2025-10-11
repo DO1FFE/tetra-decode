@@ -466,6 +466,7 @@ class TetraDecoder(QtCore.QObject):
         self._thread = None
         self._running = threading.Event()
         self._procs = []
+        self._audio_thread = None
         self._fifo = os.path.join(tempfile.gettempdir(), "tetra_audio_fifo")
         if os.name == "nt":
             self._fifo += f"_{os.getpid()}.raw"
@@ -481,13 +482,34 @@ class TetraDecoder(QtCore.QObject):
     def stop(self):
         """Stop decoding and terminate child processes."""
         self._running.clear()
-        for p in self._procs:
-            if p and p.poll() is None:
-                p.terminate()
-        self._procs = []
-        if self._thread:
+        self._terminate_processes()
+        if (
+            self._audio_thread
+            and self._audio_thread.is_alive()
+            and threading.current_thread() is not self._audio_thread
+        ):
+            self._audio_thread.join(timeout=1)
+        if (
+            self._thread
+            and self._thread.is_alive()
+            and threading.current_thread() is not self._thread
+        ):
             self._thread.join(timeout=1)
-            self._thread = None
+        self._thread = None
+        self._audio_thread = None
+
+    def _terminate_processes(self):
+        for proc in self._procs:
+            if proc and proc.poll() is None:
+                proc.terminate()
+        for proc in self._procs:
+            if not proc:
+                continue
+            try:
+                proc.wait(timeout=1)
+            except Exception:
+                pass
+        self._procs = []
 
     def _run(self, frequency: float):
         cmds = [
@@ -500,9 +522,13 @@ class TetraDecoder(QtCore.QObject):
         for cmd in cmds:
             if not shutil.which(cmd[0]):
                 self.output.emit(f"{cmd[0]} not found in PATH")
+                self._running.clear()
                 self.finished.emit()
                 return
 
+        self._procs = []
+        self._audio_thread = None
+        p3 = None
         try:
             if os.path.exists(self._fifo):
                 os.remove(self._fifo)
@@ -510,8 +536,19 @@ class TetraDecoder(QtCore.QObject):
                 os.mkfifo(self._fifo)
             else:
                 open(self._fifo, "wb").close()
-            p1 = subprocess.Popen(cmds[0], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            p2 = subprocess.Popen(cmds[1], stdin=p1.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p1 = subprocess.Popen(
+                cmds[0],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            self._procs.append(p1)
+            p2 = subprocess.Popen(
+                cmds[1],
+                stdin=p1.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            self._procs.append(p2)
             p1.stdout.close()
             p3 = subprocess.Popen(
                 cmds[2],
@@ -522,26 +559,31 @@ class TetraDecoder(QtCore.QObject):
                 bufsize=1,
             )
             p2.stdout.close()
-            self._procs = [p1, p2, p3]
-            audio_thread = threading.Thread(target=self._read_audio, daemon=True)
-            audio_thread.start()
+            self._procs.append(p3)
+            self._audio_thread = threading.Thread(target=self._read_audio, daemon=True)
+            self._audio_thread.start()
+
+            if p3 and p3.stdout:
+                for line in p3.stdout:
+                    if not self._running.is_set():
+                        break
+                    txt = line.rstrip()
+                    self.output.emit(txt)
+                    if "CACH" in txt or "LIP" in txt:
+                        self.encrypted.emit()
         except Exception as exc:
             self.output.emit(f"Failed to start decoder: {exc}")
+        finally:
+            self._running.clear()
+            self._terminate_processes()
+            if (
+                self._audio_thread
+                and self._audio_thread.is_alive()
+                and threading.current_thread() is not self._audio_thread
+            ):
+                self._audio_thread.join(timeout=1)
+            self._audio_thread = None
             self.finished.emit()
-            return
-
-        for line in p3.stdout:
-            if not self._running.is_set():
-                break
-            txt = line.rstrip()
-            self.output.emit(txt)
-            if "CACH" in txt or "LIP" in txt:
-                QtCore.QMetaObject.invokeMethod(
-                    self, "encrypted", QtCore.Qt.QueuedConnection
-                )
-
-        self.stop()
-        self.finished.emit()
 
     def _read_audio(self):
         try:
