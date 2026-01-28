@@ -671,6 +671,8 @@ class MainWindow(QtWidgets.QMainWindow):
         }
         self.config.update(load_config())
 
+        self.manual_lock = False
+
         self.tabs = QtWidgets.QTabWidget()
         self._build_tabs()
 
@@ -777,6 +779,9 @@ class MainWindow(QtWidgets.QMainWindow):
         ctl_layout.addWidget(self.freq_label)
         self.save_png_btn = QtWidgets.QPushButton("Spektrum als PNG speichern")
         ctl_layout.addWidget(self.save_png_btn)
+        self.manual_lock_btn = QtWidgets.QPushButton("Modus: Automatisch")
+        self.manual_lock_btn.setCheckable(True)
+        ctl_layout.addWidget(self.manual_lock_btn)
 
         v1 = QtWidgets.QVBoxLayout(tab1)
         v1.addLayout(ctl_layout)
@@ -785,6 +790,7 @@ class MainWindow(QtWidgets.QMainWindow):
         v1.addWidget(QtWidgets.QLabel("Letzte Frequenzen:"))
         v1.addWidget(self.freq_list)
         self.save_png_btn.clicked.connect(self.save_spectrum_png)
+        self.manual_lock_btn.toggled.connect(self._toggle_manual_lock)
 
         # Tab 2: Audio & Activity
         tab2 = QtWidgets.QWidget()
@@ -975,6 +981,12 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(float)
     def update_frequency(self, freq):
         """Neue Frequenzauswahl verarbeiten."""
+        if self.manual_lock:
+            self.log.appendPlainText(
+                f"Automatische Frequenz ignoriert (Manuell aktiv): {freq/1e6:.3f} MHz"
+            )
+            self.freq_history.appendleft(freq / 1e6)
+            return
         self._set_frequency_and_process(freq, source="scan")
 
     @QtCore.pyqtSlot(QtWidgets.QListWidgetItem)
@@ -983,6 +995,7 @@ class MainWindow(QtWidgets.QMainWindow):
         freq = item.data(QtCore.Qt.UserRole)
         if not freq:
             return
+        self._set_manual_lock(True)
         self._set_frequency_and_process(freq, source="manual")
 
     def _set_frequency_and_process(self, freq, source="manual"):
@@ -998,6 +1011,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tetra_start_btn.setEnabled(True)
         if self.tetra_auto_cb.isChecked():
             self.start_decoding()
+
+    def _set_manual_lock(self, enabled: bool):
+        self.manual_lock = enabled
+        if self.manual_lock_btn.isChecked() != enabled:
+            self.manual_lock_btn.blockSignals(True)
+            self.manual_lock_btn.setChecked(enabled)
+            self.manual_lock_btn.blockSignals(False)
+        status = "Manuell" if enabled else "Automatisch"
+        self.manual_lock_btn.setText(f"Modus: {status}")
+        self.log.appendPlainText(f"Modus gewechselt: {status}")
+
+    def _toggle_manual_lock(self, enabled: bool):
+        self._set_manual_lock(enabled)
 
     @QtCore.pyqtSlot()
     def notify_activity(self):
