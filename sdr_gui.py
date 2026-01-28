@@ -697,6 +697,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.start_btn.clicked.connect(self.start)
         self.stop_btn.clicked.connect(self.stop)
         self.scanner.spectrum_ready.connect(self.canvas.update_spectrum)
+        self.scanner.spectrum_ready.connect(self._update_scan_results)
         self.scanner.frequency_selected.connect(self.update_frequency)
 
         self.decoder.output.connect(self._append_tetra)
@@ -724,6 +725,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_ppm(self.ppm_spin.value())
 
         self.freq_history = deque(maxlen=10)
+        self.scan_results = {}
         self.current_frequency = None
         self.cells = {}
         self.packet_counts = {}
@@ -931,15 +933,50 @@ class MainWindow(QtWidgets.QMainWindow):
         self.player.ppm = value
         self.decoder.ppm = value
 
+    @QtCore.pyqtSlot(np.ndarray, np.ndarray)
+    def _update_scan_results(self, freqs, powers):
+        """Aggregiere Scan-Peaks und aktualisiere die Frequenzliste."""
+        if freqs is None or powers is None or len(freqs) == 0 or len(powers) == 0:
+            return
+
+        bin_hz = freqs[1] - freqs[0] if len(freqs) > 1 else 1.0
+        if bin_hz <= 0:
+            return
+
+        bin_indices = np.rint(freqs / bin_hz).astype(int)
+        for idx, freq, power in zip(bin_indices, freqs, powers):
+            current = self.scan_results.get(idx)
+            if current is None or power > current["power"]:
+                self.scan_results[idx] = {"freq": freq, "power": power}
+
+        if len(self.scan_results) > 200:
+            top_items = sorted(
+                self.scan_results.items(),
+                key=lambda item: item[1]["power"],
+                reverse=True,
+            )[:200]
+            self.scan_results = dict(top_items)
+
+        top_peaks = sorted(
+            self.scan_results.values(),
+            key=lambda item: item["power"],
+            reverse=True,
+        )[:20]
+
+        self.freq_list.clear()
+        for entry in top_peaks:
+            freq_mhz = entry["freq"] / 1e6
+            text = f"{freq_mhz:.3f} MHz \u2013 {entry['power']:.1f} dB"
+            item = QtWidgets.QListWidgetItem(text)
+            item.setData(QtCore.Qt.UserRole, entry["freq"])
+            self.freq_list.addItem(item)
+
     @QtCore.pyqtSlot(float)
     def update_frequency(self, freq):
-        """Handle new frequency selection."""
+        """Neue Frequenzauswahl verarbeiten."""
         self.freq_label.setText(f"Freq: {freq/1e6:.3f} MHz")
-        self.log.appendPlainText(f"Selected frequency: {freq/1e6:.3f} MHz")
+        self.log.appendPlainText(f"Gew\u00e4hlte Frequenz: {freq/1e6:.3f} MHz")
         self.freq_history.appendleft(freq/1e6)
-        self.freq_list.clear()
-        for f in self.freq_history:
-            self.freq_list.addItem(f"{f:.3f} MHz")
         self.current_frequency = freq
         self.player.start(freq)
         self.tetra_start_btn.setEnabled(True)
