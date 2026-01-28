@@ -666,6 +666,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "scheduler_interval": 15,
             "scheduler_enabled": False,
             "ppm": 0,
+            "talkgroups": {},
         }
         self.config.update(load_config())
 
@@ -719,6 +720,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_frequency = None
         self.cells = {}
         self.packet_counts = {}
+        self.talkgroups = {}
+        self._load_talkgroups_from_config()
+        self._update_talkgroups_table()
 
         self.setup_worker = None
         missing_cmds, missing_mods, missing_optional = SetupWorker.detect_missing_requirements()
@@ -864,12 +868,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stats_ax = self.stats_canvas.figure.add_subplot(111)
         v6.addWidget(self.stats_canvas)
 
+        # Tab 7: Talkgroups
+        tab7 = QtWidgets.QWidget()
+        v7 = QtWidgets.QVBoxLayout(tab7)
+        self.talkgroup_table = QtWidgets.QTableWidget(0, 3)
+        self.talkgroup_table.setHorizontalHeaderLabels(
+            ["TG-ID", "Treffer", "Letzte Aktivität"]
+        )
+        self.talkgroup_table.horizontalHeader().setStretchLastSection(True)
+        v7.addWidget(self.talkgroup_table)
+
         self.tabs.addTab(tab1, "Spektrum & Steuerung")
         self.tabs.addTab(tab2, "Audio & Aktivit\u00e4t")
         self.tabs.addTab(tab3, "Einstellungen")
         self.tabs.addTab(tab4, "TETRA-Dekodierung")
         self.tabs.addTab(tab5, "Zellen")
         self.tabs.addTab(tab6, "Statistik")
+        self.tabs.addTab(tab7, "Talkgroups")
 
     def refresh_devices(self):
         """Populate device box with detected SDR devices."""
@@ -950,6 +965,7 @@ class MainWindow(QtWidgets.QMainWindow):
         logger.info(line)
         self.parse_cell_info(line)
         self.parse_packet_type(line)
+        self.parse_talkgroups(line)
 
     def _decoder_finished(self):
         self.tetra_start_btn.setEnabled(True)
@@ -975,6 +991,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stop_decoding()
 
     def closeEvent(self, event):
+        self._persist_talkgroups_to_config()
         save_config(self.config)
         super().closeEvent(event)
 
@@ -1077,6 +1094,79 @@ class MainWindow(QtWidgets.QMainWindow):
                     f"TETRA-Aktivit\u00e4t auf {self.current_frequency/1e6:.4f} MHz: {t} empfangen"
                 )
                 break
+
+    def parse_talkgroups(self, line: str):
+        ids = self._extract_talkgroup_ids(line)
+        if not ids:
+            return
+        now = datetime.now()
+        for tg_id in ids:
+            info = self.talkgroups.get(tg_id, {"count": 0, "last_seen": now})
+            info["count"] = info.get("count", 0) + 1
+            info["last_seen"] = now
+            self.talkgroups[tg_id] = info
+        self._update_talkgroups_table()
+
+    def _extract_talkgroup_ids(self, line: str):
+        muster = re.compile(
+            r"\b(?:TGID|TG|talkgroup|group)\s*[:=]?\s*(0x[0-9A-Fa-f]+|\d+)\b",
+            re.IGNORECASE,
+        )
+        ids = []
+        for match in muster.finditer(line):
+            raw = match.group(1)
+            try:
+                value = int(raw, 0)
+                ids.append(str(value))
+            except ValueError:
+                ids.append(raw)
+        return ids
+
+    def _update_talkgroups_table(self):
+        if not hasattr(self, "talkgroup_table"):
+            return
+        sortiert = sorted(
+            self.talkgroups.items(),
+            key=lambda item: item[1].get("last_seen") or datetime.min,
+            reverse=True,
+        )
+        self.talkgroup_table.setRowCount(len(sortiert))
+        for row, (tg_id, info) in enumerate(sortiert):
+            count = info.get("count", 0)
+            last_seen = info.get("last_seen")
+            last_text = last_seen.strftime("%Y-%m-%d %H:%M:%S") if last_seen else ""
+            self.talkgroup_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(tg_id)))
+            self.talkgroup_table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(count)))
+            self.talkgroup_table.setItem(row, 2, QtWidgets.QTableWidgetItem(last_text))
+
+    def _load_talkgroups_from_config(self):
+        gespeicherte = self.config.get("talkgroups", {})
+        if not isinstance(gespeicherte, dict):
+            return
+        for tg_id, info in gespeicherte.items():
+            if not isinstance(info, dict):
+                continue
+            last_seen = info.get("last_seen")
+            parsed_last = None
+            if isinstance(last_seen, str):
+                try:
+                    parsed_last = datetime.fromisoformat(last_seen)
+                except ValueError:
+                    parsed_last = None
+            self.talkgroups[str(tg_id)] = {
+                "count": int(info.get("count", 0)),
+                "last_seen": parsed_last,
+            }
+
+    def _persist_talkgroups_to_config(self):
+        gespeicherte = {}
+        for tg_id, info in self.talkgroups.items():
+            last_seen = info.get("last_seen")
+            gespeicherte[str(tg_id)] = {
+                "count": int(info.get("count", 0)),
+                "last_seen": last_seen.isoformat() if last_seen else "",
+            }
+        self.config["talkgroups"] = gespeicherte
 
 
 
