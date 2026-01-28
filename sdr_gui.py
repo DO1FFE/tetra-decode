@@ -667,6 +667,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "scheduler_enabled": False,
             "ppm": 0,
             "talkgroups": {},
+            "selected_talkgroups": [],
         }
         self.config.update(load_config())
 
@@ -713,6 +714,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.export_cells_btn.clicked.connect(self.export_cells_csv)
         self.token_edit.textChanged.connect(lambda t: self.config.__setitem__("telegram_token", t))
         self.chat_edit.textChanged.connect(lambda t: self.config.__setitem__("telegram_chat", t))
+        self.talkgroup_select_all_btn.clicked.connect(
+            lambda: self._set_all_talkgroup_selection(True)
+        )
+        self.talkgroup_select_none_btn.clicked.connect(
+            lambda: self._set_all_talkgroup_selection(False)
+        )
 
         self._update_ppm(self.ppm_spin.value())
 
@@ -721,8 +728,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cells = {}
         self.packet_counts = {}
         self.talkgroups = {}
+        self.selected_talkgroups = set()
         self._load_talkgroups_from_config()
+        self._load_selected_talkgroups_from_config()
         self._update_talkgroups_table()
+
+        self.talkgroup_table.itemChanged.connect(self._handle_talkgroup_selection_change)
 
         self.setup_worker = None
         missing_cmds, missing_mods, missing_optional = SetupWorker.detect_missing_requirements()
@@ -871,11 +882,27 @@ class MainWindow(QtWidgets.QMainWindow):
         # Tab 7: Talkgroups
         tab7 = QtWidgets.QWidget()
         v7 = QtWidgets.QVBoxLayout(tab7)
-        self.talkgroup_table = QtWidgets.QTableWidget(0, 3)
+        self.talkgroup_table = QtWidgets.QTableWidget(0, 4)
         self.talkgroup_table.setHorizontalHeaderLabels(
-            ["TG-ID", "Treffer", "Letzte Aktivität"]
+            ["Auswahl", "TG-ID", "Treffer", "Letzte Aktivität"]
         )
         self.talkgroup_table.horizontalHeader().setStretchLastSection(True)
+        self.talkgroup_table.horizontalHeader().setSectionResizeMode(
+            0, QtWidgets.QHeaderView.ResizeToContents
+        )
+        self.talkgroup_table.horizontalHeader().setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeToContents
+        )
+        self.talkgroup_table.horizontalHeader().setSectionResizeMode(
+            2, QtWidgets.QHeaderView.ResizeToContents
+        )
+        auswahl_layout = QtWidgets.QHBoxLayout()
+        self.talkgroup_select_all_btn = QtWidgets.QPushButton("Alle auswählen")
+        self.talkgroup_select_none_btn = QtWidgets.QPushButton("Alle abwählen")
+        auswahl_layout.addWidget(self.talkgroup_select_all_btn)
+        auswahl_layout.addWidget(self.talkgroup_select_none_btn)
+        auswahl_layout.addStretch()
+        v7.addLayout(auswahl_layout)
         v7.addWidget(self.talkgroup_table)
 
         self.tabs.addTab(tab1, "Spektrum & Steuerung")
@@ -954,6 +981,8 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.information(self, "Info", "Verschl\u00fcsseltes Signal erkannt")
 
     def _append_tetra(self, line: str):
+        if not self._line_matches_selected_talkgroup(line):
+            return
         flt = self.filter_edit.text()
         if flt:
             try:
@@ -992,6 +1021,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         self._persist_talkgroups_to_config()
+        self._persist_selected_talkgroups_to_config()
         save_config(self.config)
         super().closeEvent(event)
 
@@ -1130,14 +1160,58 @@ class MainWindow(QtWidgets.QMainWindow):
             key=lambda item: item[1].get("last_seen") or datetime.min,
             reverse=True,
         )
+        self.talkgroup_table.blockSignals(True)
         self.talkgroup_table.setRowCount(len(sortiert))
         for row, (tg_id, info) in enumerate(sortiert):
             count = info.get("count", 0)
             last_seen = info.get("last_seen")
             last_text = last_seen.strftime("%Y-%m-%d %H:%M:%S") if last_seen else ""
-            self.talkgroup_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(tg_id)))
-            self.talkgroup_table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(count)))
-            self.talkgroup_table.setItem(row, 2, QtWidgets.QTableWidgetItem(last_text))
+            auswahl_item = QtWidgets.QTableWidgetItem("")
+            auswahl_item.setFlags(
+                auswahl_item.flags() | QtCore.Qt.ItemIsUserCheckable
+            )
+            auswahl_item.setCheckState(
+                QtCore.Qt.Checked
+                if str(tg_id) in self.selected_talkgroups
+                else QtCore.Qt.Unchecked
+            )
+            self.talkgroup_table.setItem(row, 0, auswahl_item)
+            self.talkgroup_table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(tg_id)))
+            self.talkgroup_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(count)))
+            self.talkgroup_table.setItem(row, 3, QtWidgets.QTableWidgetItem(last_text))
+        self.talkgroup_table.blockSignals(False)
+
+    def _handle_talkgroup_selection_change(self, item: QtWidgets.QTableWidgetItem):
+        if item.column() != 0:
+            return
+        tg_item = self.talkgroup_table.item(item.row(), 1)
+        if not tg_item:
+            return
+        tg_id = str(tg_item.text()).strip()
+        if not tg_id:
+            return
+        if item.checkState() == QtCore.Qt.Checked:
+            self.selected_talkgroups.add(tg_id)
+        else:
+            self.selected_talkgroups.discard(tg_id)
+        self._persist_selected_talkgroups_to_config()
+
+    def _set_all_talkgroup_selection(self, selected: bool):
+        ids = {str(tg_id) for tg_id in self.talkgroups.keys()}
+        if selected:
+            self.selected_talkgroups = ids
+        else:
+            self.selected_talkgroups = set()
+        self._persist_selected_talkgroups_to_config()
+        self._update_talkgroups_table()
+
+    def _line_matches_selected_talkgroup(self, line: str) -> bool:
+        if not self.selected_talkgroups:
+            return True
+        ids = self._extract_talkgroup_ids(line)
+        if not ids:
+            return False
+        return any(tg_id in self.selected_talkgroups for tg_id in ids)
 
     def _load_talkgroups_from_config(self):
         gespeicherte = self.config.get("talkgroups", {})
@@ -1158,6 +1232,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 "last_seen": parsed_last,
             }
 
+    def _load_selected_talkgroups_from_config(self):
+        gespeicherte = self.config.get("selected_talkgroups", [])
+        if isinstance(gespeicherte, list):
+            self.selected_talkgroups = {str(tg_id) for tg_id in gespeicherte}
+        else:
+            self.selected_talkgroups = set()
+
     def _persist_talkgroups_to_config(self):
         gespeicherte = {}
         for tg_id, info in self.talkgroups.items():
@@ -1168,6 +1249,8 @@ class MainWindow(QtWidgets.QMainWindow):
             }
         self.config["talkgroups"] = gespeicherte
 
+    def _persist_selected_talkgroups_to_config(self):
+        self.config["selected_talkgroups"] = sorted(self.selected_talkgroups)
 
 
 if __name__ == "__main__":
