@@ -696,6 +696,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ppm_spin.valueChanged.connect(self._update_ppm)
         self.start_btn.clicked.connect(self.start)
         self.stop_btn.clicked.connect(self.stop)
+        self.freq_list.itemDoubleClicked.connect(self._select_frequency_from_list)
         self.scanner.spectrum_ready.connect(self.canvas.update_spectrum)
         self.scanner.spectrum_ready.connect(self._update_scan_results)
         self.scanner.frequency_selected.connect(self.update_frequency)
@@ -974,9 +975,24 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(float)
     def update_frequency(self, freq):
         """Neue Frequenzauswahl verarbeiten."""
+        self._set_frequency_and_process(freq, source="scan")
+
+    @QtCore.pyqtSlot(QtWidgets.QListWidgetItem)
+    def _select_frequency_from_list(self, item):
+        """Frequenz aus der Liste ausw\u00e4hlen und manuell tunen."""
+        freq = item.data(QtCore.Qt.UserRole)
+        if not freq:
+            return
+        self._set_frequency_and_process(freq, source="manual")
+
+    def _set_frequency_and_process(self, freq, source="manual"):
+        """Gemeinsamer Einstieg zum Setzen der Frequenz und Starten des Players."""
         self.freq_label.setText(f"Freq: {freq/1e6:.3f} MHz")
-        self.log.appendPlainText(f"Gew\u00e4hlte Frequenz: {freq/1e6:.3f} MHz")
-        self.freq_history.appendleft(freq/1e6)
+        if source == "manual":
+            self.log.appendPlainText(f"Manuell ausgew\u00e4hlt: {freq/1e6:.3f} MHz")
+        else:
+            self.log.appendPlainText(f"Gew\u00e4hlte Frequenz: {freq/1e6:.3f} MHz")
+        self.freq_history.appendleft(freq / 1e6)
         self.current_frequency = freq
         self.player.start(freq)
         self.tetra_start_btn.setEnabled(True)
