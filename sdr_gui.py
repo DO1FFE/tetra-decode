@@ -43,26 +43,35 @@ logger.addHandler(handler)
 
 
 def list_sdr_devices():
-    """Return a list of detected RTL-SDR devices."""
+    """Gibt eine Liste erkannter RTL-SDR-Geräte zurück."""
     devices = []
     try:
-        out = subprocess.check_output(["rtl_test", "-t"], text=True,
-                                      stderr=subprocess.STDOUT, timeout=5)
+        out = subprocess.check_output(
+            ["rtl_test", "-t"], text=True, stderr=subprocess.STDOUT, timeout=5
+        )
         for line in out.splitlines():
-            line = line.strip()
-            if line.startswith("0:") or line.startswith("1:"):
-                devices.append(line)
+            match = re.match(r"^\s*(\d+):\s*(.+)$", line)
+            if match:
+                index = match.group(1)
+                name = match.group(2).strip()
+                devices.append(f"{index}: {name}")
     except Exception:
         pass
     if not devices:
         try:
             out = subprocess.check_output(["lsusb"], text=True, timeout=5)
+            fallback_index = 0
             for line in out.splitlines():
                 if "RTL" in line or "Realtek" in line:
-                    devices.append(line.strip())
+                    label = line.strip()
+                    match = re.match(r"^Bus\s+\d+\s+Device\s+\d+:\s*(.+)$", label)
+                    if match:
+                        label = match.group(1).strip()
+                    devices.append(f"{fallback_index}: {label}")
+                    fallback_index += 1
         except Exception:
             pass
-    return devices or ["RTL-SDR"]
+    return devices or ["0: RTL-SDR"]
 
 
 def load_config():
