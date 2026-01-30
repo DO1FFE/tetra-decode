@@ -480,9 +480,8 @@ class TetraDecoder(QtCore.QObject):
         self._running = threading.Event()
         self._procs = []
         self._audio_thread = None
-        self._fifo = os.path.join(tempfile.gettempdir(), "tetra_audio_fifo")
-        if os.name == "nt":
-            self._fifo += f"_{os.getpid()}.raw"
+        self._audio_path = None
+        self._audio_mode = None
 
     def start(self, frequency: float):
         """Startet die Dekodierkette für die angegebene Frequenz."""
@@ -510,6 +509,16 @@ class TetraDecoder(QtCore.QObject):
             self._thread.join(timeout=1)
         self._thread = None
         self._audio_thread = None
+        self._cleanup_audio_file()
+
+    def _cleanup_audio_file(self):
+        if self._audio_path:
+            try:
+                os.remove(self._audio_path)
+            except OSError:
+                pass
+            self._audio_path = None
+            self._audio_mode = None
 
     def _terminate_processes(self):
         for proc in self._procs:
@@ -529,27 +538,33 @@ class TetraDecoder(QtCore.QObject):
         if self.device_id is not None:
             receiver_cmd.extend(["-d", str(self.device_id)])
         audio_enabled = True
-        if os.name == "nt":
-            audio_enabled = False
-            self.output.emit("Audioausgabe unter Windows deaktiviert (keine Pipe verfügbar).")
 
         self._procs = []
         self._audio_thread = None
         p3 = None
         try:
             if audio_enabled:
-                if os.path.exists(self._fifo):
-                    os.remove(self._fifo)
-                if hasattr(os, "mkfifo"):
-                    os.mkfifo(self._fifo)
+                if not sys.platform.startswith("win") and hasattr(os, "mkfifo"):
+                    self._audio_path = os.path.join(
+                        tempfile.gettempdir(), f"tetra_audio_fifo_{os.getpid()}"
+                    )
+                    if os.path.exists(self._audio_path):
+                        os.remove(self._audio_path)
+                    os.mkfifo(self._audio_path)
+                    self._audio_mode = "fifo"
                 else:
-                    audio_enabled = False
-                    self.output.emit("Audioausgabe deaktiviert (keine FIFO-Unterstützung verfügbar).")
+                    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".raw")
+                    self._audio_path = tmp_file.name
+                    tmp_file.close()
+                    self._audio_mode = "file"
+                self.output.emit(
+                    f"Audioausgabe aktiviert ({self._audio_mode}), Pfad: {self._audio_path}"
+                )
 
             cmds = [
                 receiver_cmd,
                 ["demod_float"],
-                ["tetra-rx"] + (["-a", self._fifo] if audio_enabled else []),
+                ["tetra-rx"] + (["-a", self._audio_path] if audio_enabled else []),
             ]
 
             # Prüfen, ob alle Befehle vor dem Start vorhanden sind
@@ -607,24 +622,46 @@ class TetraDecoder(QtCore.QObject):
             ):
                 self._audio_thread.join(timeout=1)
             self._audio_thread = None
+            self._cleanup_audio_file()
             self.finished.emit()
 
     def _read_audio(self):
         try:
             while self._running.is_set():
                 try:
-                    with open(self._fifo, "rb", buffering=0) as fh:
-                        while self._running.is_set():
-                            data = fh.read(320)
-                            if not data:
-                                time.sleep(0.05)
-                                break
-                            self.audio.emit(data)
+                    if self._audio_mode == "fifo":
+                        with open(self._audio_path, "rb", buffering=0) as fh:
+                            while self._running.is_set():
+                                data = fh.read(320)
+                                if not data:
+                                    time.sleep(0.05)
+                                    break
+                                self.audio.emit(data)
+                    elif self._audio_mode == "file":
+                        with open(self._audio_path, "rb", buffering=0) as fh:
+                            pos = 0
+                            while self._running.is_set():
+                                try:
+                                    size = os.path.getsize(self._audio_path)
+                                except OSError:
+                                    time.sleep(0.05)
+                                    continue
+                                if size - pos < 320:
+                                    time.sleep(0.05)
+                                    continue
+                                fh.seek(pos)
+                                data = fh.read(320)
+                                pos = fh.tell()
+                                if data:
+                                    self.audio.emit(data)
+                                else:
+                                    time.sleep(0.05)
+                    else:
+                        time.sleep(0.05)
                 except Exception:
                     time.sleep(0.05)
         finally:
-            if os.path.exists(self._fifo):
-                os.remove(self._fifo)
+            self._cleanup_audio_file()
 
 
 class SpectrumCanvas(FigureCanvas):
