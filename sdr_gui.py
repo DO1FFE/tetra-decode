@@ -91,7 +91,7 @@ def save_config(cfg: dict):
 
 
 class SetupWorker(QtCore.QThread):
-    """Check for external tools and python modules and install them."""
+    """Prüft externe Werkzeuge und Python-Module und installiert sie."""
 
     log = QtCore.pyqtSignal(str)
     finished = QtCore.pyqtSignal()
@@ -113,7 +113,7 @@ class SetupWorker(QtCore.QThread):
 
     @classmethod
     def detect_missing_requirements(cls):
-        """Return a tuple with missing commands, modules and optional tools."""
+        """Gibt ein Tupel mit fehlenden Befehlen, Modulen und optionalen Werkzeugen zurück."""
         missing_cmds = [cmd for cmd in cls.REQUIRED_CMDS if not shutil.which(cmd)]
         missing_mods = [mod for mod in cls.PY_MODULES if not cls._has_module(mod)]
         missing_optional = []
@@ -138,34 +138,34 @@ class SetupWorker(QtCore.QThread):
             if self._run_install_script() and shutil.which(cmd):
                 continue
             if sys.platform.startswith("linux"):
-                self.log.emit(f"Installing {cmd} via apt ({pkg})")
+                self.log.emit(f"Installiere {cmd} über apt ({pkg})")
                 self._run_cmd(["sudo", "apt-get", "install", "-y", pkg])
             elif sys.platform.startswith("win"):
                 if pkg in ("rtl-sdr", "osmocom-tetra"):
                     if self._run_install_script() and shutil.which(cmd):
                         continue
-                    self.log.emit(f"{cmd} missing - please install {pkg} manually")
+                    self.log.emit(f"{cmd} fehlt - bitte {pkg} manuell installieren")
                 elif shutil.which("choco"):
-                    self.log.emit(f"Installing {cmd} via choco ({pkg})")
+                    self.log.emit(f"Installiere {cmd} über choco ({pkg})")
                     self._run_cmd(["choco", "install", "-y", pkg])
                 else:
-                    self.log.emit(f"{cmd} missing - please install {pkg} manually")
+                    self.log.emit(f"{cmd} fehlt - bitte {pkg} manuell installieren")
             else:
-                self.log.emit(f"{cmd} missing - please install {pkg} manually")
+                self.log.emit(f"{cmd} fehlt - bitte {pkg} manuell installieren")
 
         for mod in self.PY_MODULES:
             if self._has_module(mod):
                 continue
             if self._run_install_script() and self._has_module(mod):
                 continue
-            self.log.emit(f"Installing python module {mod}")
+            self.log.emit(f"Installiere Python-Modul {mod}")
             self._run_cmd([sys.executable, "-m", "pip", "install", mod])
 
         if sys.platform.startswith("win") and shutil.which("choco") and not shutil.which("zadig"):
             if self._run_install_script() and shutil.which("zadig"):
                 pass
             else:
-                self.log.emit("Installing Zadig via choco")
+                self.log.emit("Installiere Zadig über choco")
                 self._run_cmd(["choco", "install", "-y", "zadig"])
 
         setup_file = os.path.expanduser("~/.tetra_setup_done")
@@ -183,7 +183,7 @@ class SetupWorker(QtCore.QThread):
                 self.log.emit(line.rstrip())
             proc.wait()
         except Exception as exc:
-            self.log.emit(f"Failed to run {' '.join(cmd)}: {exc}")
+            self.log.emit(f"Konnte {' '.join(cmd)} nicht ausführen: {exc}")
 
     def _run_install_script(self) -> bool:
         if self._install_script_ran:
@@ -219,7 +219,7 @@ class SetupWorker(QtCore.QThread):
 
 
 class SDRScanner(QtCore.QObject):
-    """Scan a frequency range using rtl_power and emit spectrum data."""
+    """Scannt einen Frequenzbereich mit rtl_power und sendet Spektrumsdaten."""
 
     spectrum_ready = QtCore.pyqtSignal(np.ndarray, np.ndarray)
     frequency_selected = QtCore.pyqtSignal(float)
@@ -234,7 +234,7 @@ class SDRScanner(QtCore.QObject):
         self._process = None
 
     def start(self, f_start=380e6, f_end=430e6, bin_size=10e3):
-        """Start scanning using rtl_power."""
+        """Startet den Scan mit rtl_power."""
         if self._thread and self._thread.is_alive():
             return
         self._running.set()
@@ -266,7 +266,7 @@ class SDRScanner(QtCore.QObject):
                                              stderr=subprocess.DEVNULL,
                                              text=True)
         except FileNotFoundError:
-            # rtl_power not found, simulate data
+            # rtl_power nicht gefunden, Daten simulieren
             self._simulate_scan(f_start, f_end, bin_size)
             return
 
@@ -278,7 +278,7 @@ class SDRScanner(QtCore.QObject):
             if len(parts) < 6:
                 continue
             try:
-                # rtl_power prints freq start, bin size, <power values>
+                # rtl_power gibt Startfrequenz, Bin-Größe und Leistungswerte aus
                 f0 = float(parts[2])
                 bin_hz = float(parts[3])
                 powers = np.array(list(map(float, parts[6:])))
@@ -305,7 +305,7 @@ class SDRScanner(QtCore.QObject):
 
 
 class AudioPlayer(QtCore.QObject):
-    """Receive audio from rtl_fm and play it via PyAudio."""
+    """Empfängt Audio von rtl_fm und spielt es über PyAudio ab."""
 
     def __init__(self, device: str, ppm: int = 0, parent=None):
         super().__init__(parent)
@@ -365,7 +365,7 @@ class AudioPlayer(QtCore.QObject):
             data = self._process.stdout.read(2048)
             if not data:
                 break
-            # apply AGC
+            # AGC anwenden
             audio = np.frombuffer(data, dtype=np.int16)
             level = np.max(np.abs(audio))
             if level > 0:
@@ -405,7 +405,7 @@ class AudioPlayer(QtCore.QObject):
 
 
 class LEDIndicator(QtWidgets.QFrame):
-    """Simple colored LED indicator widget."""
+    """Einfaches LED-Anzeige-Widget mit Farbe."""
 
     def __init__(self, size=20, parent=None):
         super().__init__(parent)
@@ -420,7 +420,7 @@ class LEDIndicator(QtWidgets.QFrame):
 
 
 class DecodedAudioPlayer(QtCore.QObject):
-    """Play decoded TETRA audio frames via PyAudio."""
+    """Spielt dekodierte TETRA-Audioframes über PyAudio ab."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -466,7 +466,7 @@ class DecodedAudioPlayer(QtCore.QObject):
 
 
 class TetraDecoder(QtCore.QObject):
-    """Run osmocom-tetra tools and emit decoded output."""
+    """Startet osmocom-tetra-Werkzeuge und liefert dekodierte Ausgabe."""
 
     output = QtCore.pyqtSignal(str)
     audio = QtCore.pyqtSignal(bytes)
@@ -486,7 +486,7 @@ class TetraDecoder(QtCore.QObject):
             self._fifo += f"_{os.getpid()}.raw"
 
     def start(self, frequency: float):
-        """Start decoding pipeline for the given frequency."""
+        """Startet die Dekodierkette für die angegebene Frequenz."""
         if self._thread and self._thread.is_alive():
             return
         self._running.set()
@@ -494,7 +494,7 @@ class TetraDecoder(QtCore.QObject):
         self._thread.start()
 
     def stop(self):
-        """Stop decoding and terminate child processes."""
+        """Stoppt die Dekodierung und beendet Kindprozesse."""
         self._running.clear()
         self._terminate_processes()
         if (
@@ -535,10 +535,10 @@ class TetraDecoder(QtCore.QObject):
             ["tetra-rx", "-a", self._fifo],
         ]
 
-        # Check all commands exist before starting
+        # Prüfen, ob alle Befehle vor dem Start vorhanden sind
         for cmd in cmds:
             if not shutil.which(cmd[0]):
-                self.output.emit(f"{cmd[0]} not found in PATH")
+                self.output.emit(f"{cmd[0]} nicht im PATH gefunden")
                 self._running.clear()
                 self.finished.emit()
                 return
@@ -589,7 +589,7 @@ class TetraDecoder(QtCore.QObject):
                     if "CACH" in txt or "LIP" in txt:
                         self.encrypted.emit()
         except Exception as exc:
-            self.output.emit(f"Failed to start decoder: {exc}")
+            self.output.emit(f"Decoder konnte nicht gestartet werden: {exc}")
         finally:
             self._running.clear()
             self._terminate_processes()
@@ -619,14 +619,14 @@ class TetraDecoder(QtCore.QObject):
 
 
 class SpectrumCanvas(FigureCanvas):
-    """Matplotlib canvas for spectrum display."""
+    """Matplotlib-Canvas für die Spektrumsanzeige."""
 
     def __init__(self, parent=None):
         self.fig = Figure(figsize=(6, 4))
         super().__init__(self.fig)
         self.ax = self.fig.add_subplot(111)
-        self.ax.set_xlabel("Frequency [Hz]")
-        self.ax.set_ylabel("Power [dB]")
+        self.ax.set_xlabel("Frequenz [Hz]")
+        self.ax.set_ylabel("Leistung [dB]")
         self.line, = self.ax.plot([], [])
 
     def update_spectrum(self, freqs, powers):
@@ -637,23 +637,23 @@ class SpectrumCanvas(FigureCanvas):
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    """Main application window."""
+    """Hauptfenster der Anwendung."""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SDR Scanner")
+        self.setWindowTitle("SDR-Scanner")
         self.resize(900, 700)
 
-        # Widgets common to multiple tabs
+        # Widgets, die in mehreren Tabs verwendet werden
         self.start_btn = QtWidgets.QPushButton(
             QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay),
-            "Start",
+            "Starten",
         )
         self.stop_btn = QtWidgets.QPushButton(
             QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.SP_MediaStop),
-            "Stop",
+            "Stopp",
         )
-        self.freq_label = QtWidgets.QLabel("Freq: N/A")
+        self.freq_label = QtWidgets.QLabel("Frequenz: k. A.")
 
         self.canvas = SpectrumCanvas()
         self.log = QtWidgets.QPlainTextEdit()
@@ -675,7 +675,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.agc_slider.setValue(10000)
         self.agc_value = QtWidgets.QLabel(str(self.agc_slider.value()))
 
-        # configuration needs to be available during tab creation
+        # Konfiguration muss während der Tab-Erstellung verfügbar sein
         self.config = {
             "theme": "light",
             "telegram_token": "",
@@ -729,7 +729,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tetra_stop_btn.clicked.connect(self.stop_decoding)
         self.play_audio_cb.toggled.connect(self._toggle_dec_audio)
 
-        self.theme_combo.currentTextChanged.connect(self.apply_theme)
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_change)
         self.scheduler_enable_cb.toggled.connect(self.update_scheduler)
         self.scheduler_interval_spin.valueChanged.connect(self.update_scheduler)
         self.export_cells_btn.clicked.connect(self.export_cells_csv)
@@ -787,8 +787,8 @@ class MainWindow(QtWidgets.QMainWindow):
             )
 
     def _build_tabs(self):
-        """Create the main tabs, including TETRA decoding."""
-        # Tab 1: Spectrum & Control
+        """Erstellt die Haupt-Tabs inklusive TETRA-Dekodierung."""
+        # Tab 1: Spektrum & Steuerung
         tab1 = QtWidgets.QWidget()
         ctl_layout = QtWidgets.QHBoxLayout()
         ctl_layout.addWidget(self.start_btn)
@@ -809,7 +809,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.save_png_btn.clicked.connect(self.save_spectrum_png)
         self.manual_lock_btn.toggled.connect(self._toggle_manual_lock)
 
-        # Tab 2: Audio & Activity
+        # Tab 2: Audio & Aktivität
         tab2 = QtWidgets.QWidget()
         v2 = QtWidgets.QVBoxLayout(tab2)
         h_led = QtWidgets.QHBoxLayout()
@@ -822,7 +822,7 @@ class MainWindow(QtWidgets.QMainWindow):
         v2.addWidget(self.play_audio_cb)
         v2.addWidget(self.record_audio_cb)
 
-        # Tab 3: Settings
+        # Tab 3: Einstellungen
         tab3 = QtWidgets.QWidget()
         f3 = QtWidgets.QFormLayout(tab3)
         dev_layout = QtWidgets.QHBoxLayout()
@@ -842,9 +842,12 @@ class MainWindow(QtWidgets.QMainWindow):
         f3.addRow("AGC-Level:", agc_layout)
 
         self.theme_combo = QtWidgets.QComboBox()
-        self.theme_combo.addItems(["light", "dark"])
-        self.theme_combo.setCurrentText(self.config.get("theme", "light"))
-        f3.addRow("Theme:", self.theme_combo)
+        self.theme_combo.addItem("Hell", "light")
+        self.theme_combo.addItem("Dunkel", "dark")
+        theme_value = self.config.get("theme", "light")
+        theme_index = 0 if theme_value == "light" else 1
+        self.theme_combo.setCurrentIndex(theme_index)
+        f3.addRow("Design:", self.theme_combo)
 
         self.scheduler_enable_cb = QtWidgets.QCheckBox("Scheduler aktiv")
         self.scheduler_enable_cb.setChecked(self.config.get("scheduler_enabled", False))
@@ -862,7 +865,7 @@ class MainWindow(QtWidgets.QMainWindow):
         f3.addRow("Telegram Token:", self.token_edit)
         f3.addRow("Chat-ID:", self.chat_edit)
 
-        # Tab 4: TETRA decoding
+        # Tab 4: TETRA-Dekodierung
         tab4 = QtWidgets.QWidget()
         v4 = QtWidgets.QVBoxLayout(tab4)
         ctl4 = QtWidgets.QHBoxLayout()
@@ -873,7 +876,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tetra_start_btn.setEnabled(False)
         self.tetra_stop_btn = QtWidgets.QPushButton(
             QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.SP_MediaStop),
-            "Stop",
+            "Stopp",
         )
         self.tetra_stop_btn.setEnabled(False)
         self.tetra_auto_cb = QtWidgets.QCheckBox("Automatisch nach Scan")
@@ -889,23 +892,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tetra_output.setReadOnly(True)
         v4.addWidget(self.tetra_output)
 
-        # Tab 5: Cells
+        # Tab 5: Zellen
         tab5 = QtWidgets.QWidget()
         v5 = QtWidgets.QVBoxLayout(tab5)
         self.cell_table = QtWidgets.QTableWidget(0, 5)
-        self.cell_table.setHorizontalHeaderLabels(["Cell ID", "LAC", "MCC", "MNC", "Freq"])
+        self.cell_table.setHorizontalHeaderLabels(
+            ["Zell-ID", "LAC", "MCC", "MNC", "Frequenz"]
+        )
         v5.addWidget(self.cell_table)
-        self.export_cells_btn = QtWidgets.QPushButton("CSV Export")
+        self.export_cells_btn = QtWidgets.QPushButton("CSV-Export")
         v5.addWidget(self.export_cells_btn)
 
-        # Tab 6: Packet stats
+        # Tab 6: Paketstatistik
         tab6 = QtWidgets.QWidget()
         v6 = QtWidgets.QVBoxLayout(tab6)
         self.stats_canvas = FigureCanvas(Figure(figsize=(4,3)))
         self.stats_ax = self.stats_canvas.figure.add_subplot(111)
         v6.addWidget(self.stats_canvas)
 
-        # Tab 7: Talkgroups
+        # Tab 7: Sprechgruppen
         tab7 = QtWidgets.QWidget()
         v7 = QtWidgets.QVBoxLayout(tab7)
         self.talkgroup_table = QtWidgets.QTableWidget(0, 4)
@@ -937,10 +942,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(tab4, "TETRA-Dekodierung")
         self.tabs.addTab(tab5, "Zellen")
         self.tabs.addTab(tab6, "Statistik")
-        self.tabs.addTab(tab7, "Talkgroups")
+        self.tabs.addTab(tab7, "Sprechgruppen")
 
     def refresh_devices(self):
-        """Populate device box with detected SDR devices."""
+        """Füllt die Geräteauswahl mit erkannten SDR-Geräten."""
         self.device_box.clear()
         for label, device_id in list_sdr_devices():
             self.device_box.addItem(label, device_id)
@@ -955,12 +960,12 @@ class MainWindow(QtWidgets.QMainWindow):
         return name, None
 
     def _update_agc(self, value):
-        """Update AGC level from slider."""
+        """Aktualisiert den AGC-Pegel aus dem Schieberegler."""
         self.agc_value.setText(str(value))
         self.player.agc_level = value
 
     def _update_ppm(self, value: int):
-        """Update PPM correction for all SDR commands."""
+        """Aktualisiert die PPM-Korrektur für alle SDR-Befehle."""
         self.config["ppm"] = value
         self.scanner.ppm = value
         self.player.ppm = value
@@ -968,7 +973,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(np.ndarray, np.ndarray)
     def _update_scan_results(self, freqs, powers):
-        """Aggregiere Scan-Peaks und aktualisiere die Frequenzliste."""
+        """Aggregiert Scan-Peaks und aktualisiert die Frequenzliste."""
         if freqs is None or powers is None or len(freqs) == 0 or len(powers) == 0:
             return
 
@@ -1026,7 +1031,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _set_frequency_and_process(self, freq, source="manual"):
         """Gemeinsamer Einstieg zum Setzen der Frequenz und Starten des Players."""
-        self.freq_label.setText(f"Freq: {freq/1e6:.3f} MHz")
+        self.freq_label.setText(f"Frequenz: {freq/1e6:.3f} MHz")
         if source == "manual":
             self.log.appendPlainText(f"Manuell ausgew\u00e4hlt: {freq/1e6:.3f} MHz")
         else:
@@ -1053,12 +1058,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def notify_activity(self):
-        """Visual indicator when activity is detected."""
+        """Visuelle Anzeige, wenn Aktivität erkannt wird."""
         self.activity_led.set_color("red")
         QtCore.QTimer.singleShot(500, lambda: self.activity_led.set_color("green"))
 
     def start_decoding(self):
-        """Start TETRA decoding pipeline."""
+        """Startet die TETRA-Dekodierkette."""
         if self.current_frequency is None:
             return
         name, device_id = self._current_device_info()
@@ -1081,7 +1086,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.decoder.start(self.current_frequency)
 
     def stop_decoding(self):
-        """Stop TETRA decoding."""
+        """Stoppt die TETRA-Dekodierung."""
         self.decoder.stop()
         self.dec_audio_player.stop()
 
@@ -1137,7 +1142,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scanner.start(f_start, f_end)
 
     def stop(self):
-        self.log.appendPlainText("Stopping")
+        self.log.appendPlainText("Stoppe")
         self.scanner.stop()
         self.player.stop()
         self.stop_decoding()
@@ -1148,13 +1153,17 @@ class MainWindow(QtWidgets.QMainWindow):
         save_config(self.config)
         super().closeEvent(event)
 
-    # ----- Utility methods -----
+    # ----- Hilfsmethoden -----
     def apply_theme(self, theme: str):
         if theme == "dark" and qdarkstyle:
             self.setStyleSheet(qdarkstyle.load_stylesheet_pyqt5())
         else:
             self.setStyleSheet("")
         self.config["theme"] = theme
+
+    def _on_theme_change(self, index: int):
+        theme_value = self.theme_combo.itemData(index) or "light"
+        self.apply_theme(theme_value)
 
     def save_spectrum_png(self):
         path = os.path.expanduser("~/TetraScans")
@@ -1206,13 +1215,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stats_canvas.draw()
 
     def export_cells_csv(self):
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "CSV speichern", "cells.csv", "CSV Files (*.csv)")
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "CSV speichern",
+            "cells.csv",
+            "CSV-Dateien (*.csv)",
+        )
         if not path:
             return
         with open(path, "w") as fh:
-            fh.write("Cell,LAC,MCC,MNC,Freq\n")
+            fh.write("Zelle,LAC,MCC,MNC,Frequenz\n")
             for c in self.cells.values():
-                fh.write(f"{c.get('cell','')},{c.get('lac','')},{c.get('mcc','')},{c.get('mnc','')},{c.get('freq','')}\n")
+                fh.write(
+                    f"{c.get('cell','')},{c.get('lac','')},"
+                    f"{c.get('mcc','')},{c.get('mnc','')},{c.get('freq','')}\n"
+                )
 
     def update_scheduler(self):
         enabled = self.scheduler_enable_cb.isChecked()
