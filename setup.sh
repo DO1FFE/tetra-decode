@@ -10,7 +10,7 @@ log() {
 }
 
 die() {
-    printf 'Error: %s\n' "$*" >&2
+    printf 'Fehler: %s\n' "$*" >&2
     exit 1
 }
 

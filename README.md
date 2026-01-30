@@ -20,7 +20,7 @@ Externe SDR-Werkzeuge sowie die osmocom-tetra-Binärdateien müssen installiert 
 - **Live-Spektrum** – das Spektrum wird während des Scans kontinuierlich dargestellt.
 - **Audio-Demodulation** – `rtl_fm` demoduliert die gewählte Frequenz und PyAudio spielt den Ton ab. Eine anpassbare AGC hält die Lautstärke stabil.
 - **TETRA-Dekodierung** – `receiver1`, `demod_float` und `tetra-rx` dekodieren unverschlüsselte Kontrollkanäle. Die Ausgabe erscheint in einem eigenen Tab und kann per Regex gefiltert werden.
-- **Talkgroups** – erkannte Talkgroup-IDs werden gezählt, mit Zeitstempel gespeichert und lassen sich gezielt auswählen, sodass nur relevante Gruppen in der Ausgabe erscheinen.
+- **Sprechgruppen** – erkannte Sprechgruppen-IDs werden gezählt, mit Zeitstempel gespeichert und lassen sich gezielt auswählen, sodass nur relevante Gruppen in der Ausgabe erscheinen.
 - **Automatische Dekodierung nach Scan** – auf Wunsch startet die TETRA-Dekodierung direkt nach einem Scanvorgang.
 - **Aktivitätserkennung** – Pegelüberwachung signalisiert Aktivität und kann optional Telegram-Benachrichtigungen senden. Erkanntes wird als WAV aufgezeichnet.
 - **Zell-Informationen** – Dekodierte Cell-IDs, LAC, MCC/MNC und die genutzte Frequenz werden in einer Tabelle gespeichert und lassen sich als CSV exportieren.
@@ -33,18 +33,12 @@ Externe SDR-Werkzeuge sowie die osmocom-tetra-Binärdateien müssen installiert 
 - **Setup-Assistent** – Prüft benötigte Tools und Python-Module und installiert sie bei Bedarf.
 - **PPM-Korrektur** – Einstellbarer PPM-Wert für RTL-SDR wird an alle SDR-Werkzeuge übergeben.
 
-## Setup
+## Einrichtung
 
 Unter Linux installierst du alle benötigten Pakete bequem über `setup.sh`. Das Skript erkennt automatisch gängige Paketmanager (APT, DNF, Pacman, Zypper), installiert die benötigten Bibliotheken und baut die osmocom-tetra-Werkzeuge bei Bedarf direkt aus den Quellen:
 
 ```bash
 ./setup.sh
-```
-
-If you only need to top up missing components later on, `install.sh` performs a quick check and installs missing RTL-SDR or osmocom-tetra tools as well as the Python dependencies automatically:
-
-```bash
-./install.sh
 ```
 
 Falls du einzelne Komponenten später nachrüsten musst, führt `install.sh` eine kompakte Prüfung aus und installiert fehlende RTL-SDR- oder osmocom-tetra-Werkzeuge sowie die Python-Abhängigkeiten automatisch nach:
@@ -68,59 +62,59 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 ```
 ---
 
-# TETRA Decode (English)
+# TETRA Decode (Deutsch)
 
-This repository contains a simple PyQt5 application demonstrating how to scan frequencies with an SDR (e.g. RTL-SDR, HackRF, LimeSDR) between 380 and 430 MHz. The strongest frequency is automatically selected and demodulated to audio using external command line tools such as `rtl_power` and `rtl_fm`. It also integrates the osmocom-tetra tools (`receiver1`, `demod_float`, `tetra-rx`) to decode unencrypted TETRA control information.
+Dieses Repository enthält eine einfache PyQt5-Anwendung, die demonstriert, wie man mit einem SDR (z.B. RTL-SDR, HackRF, LimeSDR) zwischen 380 und 430 MHz scannt. Die stärkste Frequenz wird automatisch ausgewählt und über externe Kommandozeilenwerkzeuge wie `rtl_power` und `rtl_fm` zu Audio demoduliert. Außerdem integriert sie die osmocom-tetra-Werkzeuge (`receiver1`, `demod_float`, `tetra-rx`), um unverschlüsselte TETRA-Kontrollinformationen zu dekodieren.
 
-The GUI shows a realtime spectrum, provides start/stop controls, and plays received audio through the speakers using PyAudio.
+Die grafische Oberfläche zeigt ein Echtzeit-Spektrum, bietet Start-/Stopp-Steuerung und spielt empfangenes Audio über PyAudio ab.
 
-Additional features include a scheduler for automatic scan/decoding cycles, cell information display with CSV export, basic packet statistics, Telegram notifications on activity, audio recording and spectrum snapshots. A light and dark theme can be selected in the settings tab.
+Zusätzliche Funktionen umfassen einen Scheduler für automatische Scan-/Dekodierzyklen, eine Anzeige von Zellinformationen mit CSV-Export, einfache Paketstatistiken, Telegram-Benachrichtigungen bei Aktivität, Audioaufnahmen und Spektrum-Screenshots. In den Einstellungen kann ein helles oder dunkles Design ausgewählt werden.
 
-Run the application with:
+Das Programm startest du mit:
 
 ```bash
 python sdr_gui.py
 ```
 
-External SDR utilities as well as the osmocom-tetra binaries must be installed and accessible in the system path.
+Externe SDR-Werkzeuge sowie die osmocom-tetra-Binärdateien müssen installiert und im Systempfad verfügbar sein.
 
-## Setup
+## Einrichtung
 
-On Linux you can run `setup.sh`. The helper detects common package managers (APT, DNF, Pacman, Zypper), installs all required development headers and, if necessary, builds the osmocom-tetra suite from source before pulling the Python dependencies:
+Unter Linux kannst du `setup.sh` ausführen. Das Hilfsskript erkennt gängige Paketmanager (APT, DNF, Pacman, Zypper), installiert alle benötigten Entwicklungs-Header und baut bei Bedarf die osmocom-tetra-Suite aus den Quellen, bevor es die Python-Abhängigkeiten installiert:
 
 ```bash
 ./setup.sh
 ```
 
-On Windows launch `setup.ps1` from an elevated PowerShell session. It bootstraps Chocolatey when required, downloads rtl-sdr utilities and the osmocom-tetra binaries into `%ProgramData%\tetra-decode`, amends the `PATH` accordingly and finally installs the Python packages. If any upstream download mirrors are temporarily unavailable the script reports the issue so you can provide the files manually:
+Unter Windows startest du `setup.ps1` aus einer administrativen PowerShell. Das Skript bootstrapped Chocolatey bei Bedarf, lädt die rtl-sdr-Hilfsprogramme und die osmocom-tetra-Binärdateien nach `%ProgramData%\tetra-decode`, ergänzt den `PATH` und installiert anschließend die Python-Pakete. Wenn Download-Quellen vorübergehend nicht erreichbar sind, weist dich das Skript darauf hin, damit du die Dateien manuell bereitstellen kannst:
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
 .\setup.ps1
 ```
 
-For follow-up installations there is also `install.ps1`. The helper detects missing tools or Python modules and downloads them automatically (including bootstrapping Chocolatey when necessary):
+Für Nachinstallationen gibt es zusätzlich `install.ps1`. Das Hilfsskript erkennt fehlende Werkzeuge oder Python-Module und lädt sie automatisch nach (inklusive Chocolatey-Bootstrap, falls nötig):
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
 ./install.ps1
 ```
 
-## Features
+## Funktionen
 
-- **Frequency scanning** – uses `rtl_power` to sweep a selectable range. The strongest signal is automatically picked for further processing.
-- **Realtime spectrum display** – the spectrum is plotted continuously while scanning.
-- **Audio demodulation** – `rtl_fm` demodulates the selected frequency and PyAudio plays the audio. An adjustable AGC keeps the volume stable.
-- **TETRA decoding** – integrates `receiver1`, `demod_float` and `tetra-rx` to decode unencrypted control channels. Output appears in its own tab and can be filtered by regex.
-- **Activity detection** – audio level monitoring lights up an indicator and optionally sends Telegram notifications. Detected activity is recorded to WAV files.
-- **Cell information** – decoded cell IDs, LAC, MCC/MNC and the used frequency are stored in a table and can be exported to CSV.
-- **Packet statistics** – shows a bar chart of the received TETRA packet types.
-- **Scheduler** – automatic scan and decode cycles can run periodically with a configurable interval.
-- **Spectrum snapshots** – save the currently displayed spectrum as a PNG file.
-- **Theme selection** – switch between light and dark mode.
-- **Configuration and device selection** – detected SDR devices and most settings are stored in `~/.tetra_gui_config.json`.
-- **Setup assistant** – checks for required tools and Python modules and installs them when missing.
-- **PPM correction** – adjustable RTL-SDR PPM value applied to all SDR commands.
+- **Frequenzscan** – nutzt `rtl_power`, um einen wählbaren Bereich abzusuchen. Das stärkste Signal wird automatisch für die weitere Verarbeitung ausgewählt.
+- **Echtzeit-Spektrum** – das Spektrum wird während des Scans kontinuierlich dargestellt.
+- **Audio-Demodulation** – `rtl_fm` demoduliert die gewählte Frequenz, PyAudio spielt das Audio ab. Eine anpassbare AGC hält die Lautstärke stabil.
+- **TETRA-Dekodierung** – integriert `receiver1`, `demod_float` und `tetra-rx`, um unverschlüsselte Kontrollkanäle zu dekodieren. Die Ausgabe erscheint in einem eigenen Tab und kann per Regex gefiltert werden.
+- **Aktivitätserkennung** – Audio-Pegelüberwachung zeigt Aktivität an und kann optional Telegram-Benachrichtigungen senden. Erkannte Aktivität wird als WAV aufgezeichnet.
+- **Zellinformationen** – dekodierte Cell-IDs, LAC, MCC/MNC und die genutzte Frequenz werden in einer Tabelle gespeichert und können als CSV exportiert werden.
+- **Paketstatistiken** – zeigt ein Balkendiagramm der empfangenen TETRA-Pakettypen.
+- **Scheduler** – automatische Scan- und Dekodierzyklen laufen periodisch mit konfigurierbarem Intervall.
+- **Spektrum-Snapshots** – speichert das aktuell angezeigte Spektrum als PNG-Datei.
+- **Designauswahl** – Wechsel zwischen hellem und dunklem Modus.
+- **Konfiguration und Gerätauswahl** – erkannte SDR-Geräte und die meisten Einstellungen werden in `~/.tetra_gui_config.json` gespeichert.
+- **Setup-Assistent** – prüft benötigte Tools und Python-Module und installiert sie bei Bedarf.
+- **PPM-Korrektur** – einstellbarer RTL-SDR-PPM-Wert, der an alle SDR-Befehle übergeben wird.
 
 ## Windows-EXE erstellen
 
