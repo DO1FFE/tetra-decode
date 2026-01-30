@@ -278,9 +278,9 @@ class SDRScanner(QtCore.QObject):
             if len(parts) < 6:
                 continue
             try:
-                # rtl_power gibt Startfrequenz, Bin-Größe und Leistungswerte aus
+                # rtl_power gibt Startfrequenz (parts[2]), Schrittweite (parts[4]) und Leistungswerte aus
                 f0 = float(parts[2])
-                bin_hz = float(parts[3])
+                bin_hz = float(parts[4])
                 powers = np.array(list(map(float, parts[6:])))
             except ValueError:
                 continue
