@@ -371,7 +371,8 @@ class AudioPlayer(QtCore.QObject):
             if level > 0:
                 gain = self.agc_level / level
                 audio = (audio * gain).astype(np.int16)
-            if np.max(np.abs(audio)) > self.activity_threshold:
+            hat_aktivitaet = np.max(np.abs(audio)) > self.activity_threshold
+            if hat_aktivitaet:
                 QtCore.QMetaObject.invokeMethod(
                     self.parent(), "notify_activity", QtCore.Qt.QueuedConnection
                 )
@@ -400,8 +401,6 @@ class AudioPlayer(QtCore.QObject):
             if time.time() - self.record_last > 2:
                 self.record_file.close()
                 self.record_file = None
-            else:
-                self.record_last = time.time()
 
 
 class LEDIndicator(QtWidgets.QFrame):
