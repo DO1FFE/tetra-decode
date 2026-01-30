@@ -20,11 +20,14 @@ Externe SDR-Werkzeuge sowie die osmocom-tetra-Binärdateien müssen installiert 
 - **Live-Spektrum** – das Spektrum wird während des Scans kontinuierlich dargestellt.
 - **Audio-Demodulation** – `rtl_fm` demoduliert die gewählte Frequenz und PyAudio spielt den Ton ab. Eine anpassbare AGC hält die Lautstärke stabil.
 - **TETRA-Dekodierung** – `receiver1`, `demod_float` und `tetra-rx` dekodieren unverschlüsselte Kontrollkanäle. Die Ausgabe erscheint in einem eigenen Tab und kann per Regex gefiltert werden.
+- **Talkgroups** – erkannte Talkgroup-IDs werden gezählt, mit Zeitstempel gespeichert und lassen sich gezielt auswählen, sodass nur relevante Gruppen in der Ausgabe erscheinen.
+- **Automatische Dekodierung nach Scan** – auf Wunsch startet die TETRA-Dekodierung direkt nach einem Scanvorgang.
 - **Aktivitätserkennung** – Pegelüberwachung signalisiert Aktivität und kann optional Telegram-Benachrichtigungen senden. Erkanntes wird als WAV aufgezeichnet.
 - **Zell-Informationen** – Dekodierte Cell-IDs, LAC, MCC/MNC und die genutzte Frequenz werden in einer Tabelle gespeichert und lassen sich als CSV exportieren.
 - **Paketstatistiken** – Ein Balkendiagramm zeigt die empfangenen TETRA-Pakettypen.
 - **Scheduler** – Automatische Scan- und Dekodierzyklen laufen periodisch mit konfigurierbarem Intervall.
 - **Spektrum-Screenshots** – Das aktuell angezeigte Spektrum kann als PNG gespeichert werden.
+- **Manueller Frequenzmodus** – die automatische Frequenzwahl kann gesperrt werden, um eine fixe Frequenz beizubehalten.
 - **Designauswahl** – Zwischen hellem und dunklem Modus umschalten.
 - **Konfiguration und Gerätauswahl** – Erkannte SDR-Geräte und die meisten Einstellungen werden in `~/.tetra_gui_config.json` abgelegt.
 - **Setup-Assistent** – Prüft benötigte Tools und Python-Module und installiert sie bei Bedarf.
