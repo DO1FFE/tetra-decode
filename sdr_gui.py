@@ -528,30 +528,37 @@ class TetraDecoder(QtCore.QObject):
         receiver_cmd = ["receiver1", "-f", str(int(frequency)), "-p", str(self.ppm)]
         if self.device_id is not None:
             receiver_cmd.extend(["-d", str(self.device_id)])
-        cmds = [
-            receiver_cmd,
-            ["demod_float"],
-            ["tetra-rx", "-a", self._fifo],
-        ]
-
-        # Prüfen, ob alle Befehle vor dem Start vorhanden sind
-        for cmd in cmds:
-            if not shutil.which(cmd[0]):
-                self.output.emit(f"{cmd[0]} nicht im PATH gefunden")
-                self._running.clear()
-                self.finished.emit()
-                return
+        audio_enabled = True
+        if os.name == "nt":
+            audio_enabled = False
+            self.output.emit("Audioausgabe unter Windows deaktiviert (keine Pipe verfügbar).")
 
         self._procs = []
         self._audio_thread = None
         p3 = None
         try:
-            if os.path.exists(self._fifo):
-                os.remove(self._fifo)
-            if hasattr(os, "mkfifo"):
-                os.mkfifo(self._fifo)
-            else:
-                open(self._fifo, "wb").close()
+            if audio_enabled:
+                if os.path.exists(self._fifo):
+                    os.remove(self._fifo)
+                if hasattr(os, "mkfifo"):
+                    os.mkfifo(self._fifo)
+                else:
+                    audio_enabled = False
+                    self.output.emit("Audioausgabe deaktiviert (keine FIFO-Unterstützung verfügbar).")
+
+            cmds = [
+                receiver_cmd,
+                ["demod_float"],
+                ["tetra-rx"] + (["-a", self._fifo] if audio_enabled else []),
+            ]
+
+            # Prüfen, ob alle Befehle vor dem Start vorhanden sind
+            for cmd in cmds:
+                if not shutil.which(cmd[0]):
+                    self.output.emit(f"{cmd[0]} nicht im PATH gefunden")
+                    self._running.clear()
+                    self.finished.emit()
+                    return
             p1 = subprocess.Popen(
                 cmds[0],
                 stdout=subprocess.PIPE,
@@ -576,8 +583,9 @@ class TetraDecoder(QtCore.QObject):
             )
             p2.stdout.close()
             self._procs.append(p3)
-            self._audio_thread = threading.Thread(target=self._read_audio, daemon=True)
-            self._audio_thread.start()
+            if audio_enabled:
+                self._audio_thread = threading.Thread(target=self._read_audio, daemon=True)
+                self._audio_thread.start()
 
             if p3 and p3.stdout:
                 for line in p3.stdout:
@@ -603,15 +611,17 @@ class TetraDecoder(QtCore.QObject):
 
     def _read_audio(self):
         try:
-            with open(self._fifo, "rb") as fh:
-                while self._running.is_set():
-                    data = fh.read(320)
-                    if not data:
-                        time.sleep(0.05)
-                        continue
-                    self.audio.emit(data)
-        except Exception:
-            pass
+            while self._running.is_set():
+                try:
+                    with open(self._fifo, "rb", buffering=0) as fh:
+                        while self._running.is_set():
+                            data = fh.read(320)
+                            if not data:
+                                time.sleep(0.05)
+                                break
+                            self.audio.emit(data)
+                except Exception:
+                    time.sleep(0.05)
         finally:
             if os.path.exists(self._fifo):
                 os.remove(self._fifo)
