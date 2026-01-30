@@ -52,26 +52,24 @@ def list_sdr_devices():
         for line in out.splitlines():
             match = re.match(r"^\s*(\d+):\s*(.+)$", line)
             if match:
-                index = match.group(1)
+                index = int(match.group(1))
                 name = match.group(2).strip()
-                devices.append(f"{index}: {name}")
+                devices.append((name, index))
     except Exception:
         pass
     if not devices:
         try:
             out = subprocess.check_output(["lsusb"], text=True, timeout=5)
-            fallback_index = 0
             for line in out.splitlines():
                 if "RTL" in line or "Realtek" in line:
                     label = line.strip()
                     match = re.match(r"^Bus\s+\d+\s+Device\s+\d+:\s*(.+)$", label)
                     if match:
                         label = match.group(1).strip()
-                    devices.append(f"{fallback_index}: {label}")
-                    fallback_index += 1
+                    devices.append((label, None))
         except Exception:
             pass
-    return devices or ["0: RTL-SDR"]
+    return devices or [("RTL-SDR", 0)]
 
 
 def load_config():
@@ -229,7 +227,7 @@ class SDRScanner(QtCore.QObject):
     def __init__(self, device: str, ppm: int = 0, parent=None):
         super().__init__(parent)
         self.device = device
-        self.device_index = None
+        self.device_id = None
         self.ppm = ppm
         self._thread = None
         self._running = threading.Event()
@@ -261,8 +259,8 @@ class SDRScanner(QtCore.QObject):
             f"-f{f_start/1e6:.0f}M:{f_end/1e6:.0f}M:{int(bin_size)}",
             "-i", "1", "-"
         ]
-        if self.device_index is not None:
-            cmd.extend(["-d", str(self.device_index)])
+        if self.device_id is not None:
+            cmd.extend(["-d", str(self.device_id)])
         try:
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                              stderr=subprocess.DEVNULL,
@@ -312,7 +310,7 @@ class AudioPlayer(QtCore.QObject):
     def __init__(self, device: str, ppm: int = 0, parent=None):
         super().__init__(parent)
         self.device = device
-        self.device_index = None
+        self.device_id = None
         self.ppm = ppm
         self._process = None
         self._stream = None
@@ -332,8 +330,8 @@ class AudioPlayer(QtCore.QObject):
             "-s", "48000",
             "-"
         ]
-        if self.device_index is not None:
-            cmd.extend(["-d", str(self.device_index)])
+        if self.device_id is not None:
+            cmd.extend(["-d", str(self.device_id)])
         try:
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                              stderr=subprocess.DEVNULL)
@@ -478,7 +476,7 @@ class TetraDecoder(QtCore.QObject):
     def __init__(self, ppm: int = 0, parent=None):
         super().__init__(parent)
         self.ppm = ppm
-        self.device_index = None
+        self.device_id = None
         self._thread = None
         self._running = threading.Event()
         self._procs = []
@@ -529,8 +527,8 @@ class TetraDecoder(QtCore.QObject):
 
     def _run(self, frequency: float):
         receiver_cmd = ["receiver1", "-f", str(int(frequency)), "-p", str(self.ppm)]
-        if self.device_index is not None:
-            receiver_cmd.extend(["-d", str(self.device_index)])
+        if self.device_id is not None:
+            receiver_cmd.extend(["-d", str(self.device_id)])
         cmds = [
             receiver_cmd,
             ["demod_float"],
@@ -944,23 +942,17 @@ class MainWindow(QtWidgets.QMainWindow):
     def refresh_devices(self):
         """Populate device box with detected SDR devices."""
         self.device_box.clear()
-        for pos, dev in enumerate(list_sdr_devices()):
-            match = re.match(r"^\s*(\d+):\s*(.+)$", dev)
-            if match:
-                index = int(match.group(1))
-                name = match.group(2).strip()
-            else:
-                index = pos
-                name = dev.strip()
-            self.device_box.addItem(name)
-            self.device_box.setItemData(self.device_box.count() - 1, index, QtCore.Qt.UserRole)
+        for label, device_id in list_sdr_devices():
+            self.device_box.addItem(label, device_id)
 
     def _current_device_info(self):
         name = self.device_box.currentText()
-        index = self.device_box.currentData(QtCore.Qt.UserRole)
-        if index is None:
-            index = 0
-        return name, int(index)
+        device_id = self.device_box.currentData()
+        if isinstance(device_id, str) and device_id.strip().isdigit():
+            device_id = int(device_id)
+        if isinstance(device_id, int):
+            return name, device_id
+        return name, None
 
     def _update_agc(self, value):
         """Update AGC level from slider."""
@@ -1069,17 +1061,22 @@ class MainWindow(QtWidgets.QMainWindow):
         """Start TETRA decoding pipeline."""
         if self.current_frequency is None:
             return
-        name, index = self._current_device_info()
+        name, device_id = self._current_device_info()
         self._update_ppm(self.ppm_spin.value())
-        self.decoder.device_index = index
+        self.decoder.device_id = device_id
         self.tetra_start_btn.setEnabled(False)
         self.tetra_stop_btn.setEnabled(True)
         self.tetra_output.clear()
         rec = self.record_audio_cb.isChecked()
         if self.play_audio_cb.isChecked():
             self.dec_audio_player.start(record=rec)
+        if device_id is None:
+            device_text = "ohne Index"
+        else:
+            device_text = f"Index {device_id}"
         self.log.appendPlainText(
-            f"Dekodierung gestartet mit Gerät {index} ({name}) bei {self.current_frequency/1e6:.3f} MHz"
+            f"Dekodierung gestartet mit Gerät {device_text} ({name}) "
+            f"bei {self.current_frequency/1e6:.3f} MHz"
         )
         self.decoder.start(self.current_frequency)
 
@@ -1120,17 +1117,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dec_audio_player.stop()
 
     def start(self):
-        name, index = self._current_device_info()
+        name, device_id = self._current_device_info()
         self.scanner.device = name
         self.player.device = name
-        self.scanner.device_index = index
-        self.player.device_index = index
-        self.decoder.device_index = index
+        self.scanner.device_id = device_id
+        self.player.device_id = device_id
+        self.decoder.device_id = device_id
         self._update_ppm(self.ppm_spin.value())
         rng = self.freq_range_box.currentData()
         f_start, f_end = rng if rng else (380e6, 430e6)
+        if device_id is None:
+            device_text = "ohne Index"
+        else:
+            device_text = f"Index {device_id}"
         self.log.appendPlainText(
-            f"Scan gestartet mit Gerät {index} ({name}) "
+            f"Scan gestartet mit Gerät {device_text} ({name}) "
             f"({f_start/1e6:.0f}-{f_end/1e6:.0f} MHz)"
         )
         self.scanner.start(f_start, f_end)
