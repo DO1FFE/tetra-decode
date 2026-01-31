@@ -171,15 +171,17 @@ Install-ChocoPackage -Name sox
 $toolTargets = @(
     @{ Name = 'RTL-SDR Werkzeuge';
        Urls = @(
-           'https://downloads.osmocom.org/binaries/windows/rtl-sdr/rtl-sdr-release.zip',
-           'https://github.com/librtlsdr/rtl-sdr/releases/latest/download/rtl-sdr-win64.zip'
+           'https://github.com/rtlsdrblog/rtl-sdr-blog/releases/download/v1.3.6/Release.zip',
+           'https://github.com/rtlsdrblog/rtl-sdr-blog/releases/download/1.3.5/Release.zip',
+           'https://ftp.osmocom.org/binaries/windows/rtl-sdr/rtl-sdr-64bit-20190526.zip'
        );
        Target = Join-Path $installRoot 'rtl-sdr';
        Binaries = @('rtl_fm.exe','rtl_power.exe','rtl_test.exe') },
     @{ Name = 'osmocom-tetra Werkzeuge';
        Urls = @(
-           'https://www.osmocom.org/attachments/download/3446/osmo-tetra-win64-20200512.zip',
-           'https://gitlab.com/varosi/osmo-tetra-win64/-/raw/master/osmo-tetra-win64.zip?inline=false'
+           'https://osmocom.org/attachments/download/3446/osmo-tetra-win64-20200512.zip',
+           'https://archive.org/download/osmo-tetra-win64-20200512/osmo-tetra-win64-20200512.zip',
+           'https://downloads.osmocom.org/attachments/download/3446/osmo-tetra-win64-20200512.zip'
        );
        Target = Join-Path $installRoot 'osmocom-tetra';
        Binaries = @('receiver1.exe','tetra-rx.exe','demod_float.exe') }
