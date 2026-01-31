@@ -60,7 +60,7 @@ function Download-Archive {
                 Write-Host "$Name erfolgreich heruntergeladen."
                 return $tempFile
             } else {
-                Write-Warning "Die heruntergeladene Datei von $url war kein gültiges ZIP-Archiv."
+                Write-Warning "Die heruntergeladene Datei von $url war kein gueltiges ZIP-Archiv."
                 Remove-Item -ErrorAction SilentlyContinue $tempFile
             }
         } catch {
@@ -153,7 +153,7 @@ function Install-ToolArchive {
 function Install-PythonRequirements {
     param([string] $ProjectRoot)
     if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-        Write-Warning "Python 3 wurde nicht gefunden. Überspringe Python-Abhängigkeiten."
+        Write-Warning "Python 3 wurde nicht gefunden. Ueberspringe Python-Abhaengigkeiten."
         return
     }
     python -m pip install --upgrade pip
@@ -197,4 +197,4 @@ foreach ($tool in $toolTargets) {
 
 Install-PythonRequirements -ProjectRoot $projectRoot
 
-Write-Host "install.ps1 abgeschlossen. Starte die PowerShell neu, damit PATH-Änderungen aktiv werden."
+Write-Host "install.ps1 abgeschlossen. Starte die PowerShell neu, damit PATH-Aenderungen aktiv werden."

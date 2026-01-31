@@ -51,14 +51,30 @@ Auf Windows führst du stattdessen `setup.ps1` in einer administrativen PowerShe
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
-./setup.ps1
+.\setup.ps1
 ```
 
 Für nachträgliche Ergänzungen steht außerdem `install.ps1` bereit. Das Skript erkennt fehlende Werkzeuge oder Python-Module und lädt sie – inklusive Chocolatey-Bootstrap – automatisch nach:
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
-./install.ps1
+.\install.ps1
+```
+
+### PowerShell-Fehler wegen Ausführungsrichtlinie
+
+Wenn PowerShell meldet, dass das Skript nicht digital signiert ist, kannst du es für die aktuelle Sitzung freigeben oder die Dateien entsperren:
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force
+Unblock-File -Path .\setup.ps1, .\install.ps1
+.\setup.ps1
+```
+
+Alternativ kannst du das Skript direkt mit einer temporären Richtlinie starten:
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 ---
 
@@ -97,7 +113,7 @@ Für Nachinstallationen gibt es zusätzlich `install.ps1`. Das Hilfsskript erken
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
-./install.ps1
+.\install.ps1
 ```
 
 ## Funktionen

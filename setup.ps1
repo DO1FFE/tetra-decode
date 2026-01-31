@@ -59,7 +59,7 @@ function Download-Archive {
                 Write-Host "$Name erfolgreich heruntergeladen."
                 return $tempFile
             } else {
-                Write-Warning "Die heruntergeladene Datei von $url war kein gültiges ZIP-Archiv."
+                Write-Warning "Die heruntergeladene Datei von $url war kein gueltiges ZIP-Archiv."
                 Remove-Item -ErrorAction SilentlyContinue $tempFile
             }
         } catch {
@@ -195,4 +195,4 @@ foreach ($tool in $toolTargets) {
 
 Install-PythonRequirements -ProjectRoot $projectRoot
 
-Write-Host "Setup abgeschlossen. Stelle sicher, dass du die PowerShell neu startest, damit PATH-Änderungen aktiv werden."
+Write-Host "Setup abgeschlossen. Stelle sicher, dass du die PowerShell neu startest, damit PATH-Aenderungen aktiv werden."
