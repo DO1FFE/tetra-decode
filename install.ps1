@@ -51,28 +51,56 @@ function Test-ZipFile {
 function Download-Archive {
     param(
         [Parameter(Mandatory)] [string] $Name,
-        [Parameter(Mandatory)] [string[]] $Urls
+        [Parameter(Mandatory)] [string[]] $Urls,
+        [hashtable] $Checksums,
+        [string[]] $ManualSteps
     )
 
     $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) (([System.IO.Path]::GetRandomFileName()) + '.zip')
+    $fehler = @()
     foreach ($url in $Urls) {
         try {
             Write-Host "Lade $Name von $url ..."
             Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $tempFile
+            if ($Checksums -and $Checksums.ContainsKey($url)) {
+                $expected = $Checksums[$url]
+                $actual = (Get-FileHash -Path $tempFile -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($actual -ne $expected.ToLowerInvariant()) {
+                    Write-Warning "Pruefsumme fuer $url stimmt nicht. Erwartet: $expected, erhalten: $actual."
+                    $fehler += "Pruefsumme passt nicht fuer $url."
+                    Remove-Item -ErrorAction SilentlyContinue $tempFile
+                    continue
+                }
+            }
             if (Test-ZipFile -Path $tempFile) {
                 Write-Host "$Name erfolgreich heruntergeladen."
                 return $tempFile
             } else {
                 Write-Warning "Die heruntergeladene Datei von $url war kein gueltiges ZIP-Archiv."
+                $fehler += "Defektes ZIP von $url."
                 Remove-Item -ErrorAction SilentlyContinue $tempFile
             }
         } catch {
             Write-Warning "Download von $url fehlgeschlagen: $_"
+            $fehler += "Download fehlgeschlagen von $url."
             Remove-Item -ErrorAction SilentlyContinue $tempFile
         }
     }
     Remove-Item -ErrorAction SilentlyContinue $tempFile
-    throw "Konnte $Name nicht herunterladen. Bitte manuell installieren."
+    $manualText = ''
+    if ($ManualSteps) {
+        $manualText = "Manuelle Schritte:" + [Environment]::NewLine + (($ManualSteps | ForEach-Object { "  - $_" }) -join [Environment]::NewLine)
+    }
+    $detailText = ''
+    if ($fehler.Count -gt 0) {
+        $detailText = "Details:" + [Environment]::NewLine + (($fehler | ForEach-Object { "  - $_" }) -join [Environment]::NewLine)
+    }
+    $message = @(
+        "Konnte $Name nicht herunterladen oder das ZIP ist defekt."
+        $manualText
+        $detailText
+    ) | Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.TrimEnd() }
+    throw ($message -join [Environment]::NewLine)
 }
 
 function Ensure-Directory {
@@ -100,7 +128,9 @@ function Install-ToolArchive {
         [Parameter(Mandatory)] [string] $Name,
         [Parameter(Mandatory)] [string[]] $Urls,
         [Parameter(Mandatory)] [string] $TargetDirectory,
-        [Parameter(Mandatory)] [string[]] $BinaryNames
+        [Parameter(Mandatory)] [string[]] $BinaryNames,
+        [hashtable] $Checksums,
+        [string[]] $ManualSteps
     )
 
     $existing = $true
@@ -116,7 +146,7 @@ function Install-ToolArchive {
         return
     }
 
-    $archive = Download-Archive -Name $Name -Urls $Urls
+    $archive = Download-Archive -Name $Name -Urls $Urls -Checksums $Checksums -ManualSteps $ManualSteps
     $parent = Split-Path $TargetDirectory -Parent
     Ensure-Directory $parent
     if (Test-Path $TargetDirectory) {
@@ -145,7 +175,11 @@ function Install-ToolArchive {
     foreach ($binary in $BinaryNames) {
         $resolved = Get-ChildItem -Path $TargetDirectory -Filter $binary -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($null -eq $resolved) {
-            throw "$Name wurde entpackt, aber $binary konnte nicht gefunden werden."
+            $manualText = ''
+            if ($ManualSteps) {
+                $manualText = [Environment]::NewLine + "Manuelle Schritte:" + [Environment]::NewLine + (($ManualSteps | ForEach-Object { "  - $_" }) -join [Environment]::NewLine)
+            }
+            throw "$Name wurde entpackt, aber $binary konnte nicht gefunden werden.$manualText"
         }
         $binaryDirectories += $resolved.DirectoryName
     }
@@ -188,9 +222,18 @@ $toolTargets = @(
        Binaries = @('rtl_fm.exe','rtl_power.exe','rtl_test.exe') },
     @{ Name = 'osmocom-tetra Werkzeuge';
        Urls = @(
-           'https://osmocom.org/attachments/download/3446/osmo-tetra-win64-20200512.zip',
-           'https://archive.org/download/osmo-tetra-win64-20200512/osmo-tetra-win64-20200512.zip',
-           'https://downloads.osmocom.org/attachments/download/3446/osmo-tetra-win64-20200512.zip'
+           'https://github.com/sq5bpf/osmo-tetra-sq5bpf/archive/4e9f1b23b460a6b24270ece685ac68d4d7fd4cc8.zip',
+           'https://codeload.github.com/sq5bpf/osmo-tetra-sq5bpf/zip/4e9f1b23b460a6b24270ece685ac68d4d7fd4cc8'
+       );
+       Checksums = @{
+           'https://github.com/sq5bpf/osmo-tetra-sq5bpf/archive/4e9f1b23b460a6b24270ece685ac68d4d7fd4cc8.zip' = '38920f7f49fa887e3bc98dd3d801e1574ad7143b43666e3671ea20ec9a26518e';
+           'https://codeload.github.com/sq5bpf/osmo-tetra-sq5bpf/zip/4e9f1b23b460a6b24270ece685ac68d4d7fd4cc8' = '38920f7f49fa887e3bc98dd3d801e1574ad7143b43666e3671ea20ec9a26518e'
+       };
+       ManualSteps = @(
+           'Lade die Windows-Binaries oder den Quellcode von der OsmocomTETRA-Wiki-Seite: https://osmocom.org/projects/tetra/wiki/OsmocomTETRA',
+           'Entpacke das Archiv nach ' + (Join-Path $installRoot 'osmocom-tetra'),
+           'Falls es sich um Quellcode handelt: Baue die Tools (receiver1.exe, tetra-rx.exe, demod_float.exe) und kopiere sie in das Zielverzeichnis.',
+           'Stelle sicher, dass das Zielverzeichnis im PATH liegt.'
        );
        Target = Join-Path $installRoot 'osmocom-tetra';
        Binaries = @('receiver1.exe','tetra-rx.exe','demod_float.exe') }
@@ -198,7 +241,7 @@ $toolTargets = @(
 
 foreach ($tool in $toolTargets) {
     try {
-        Install-ToolArchive -Name $tool.Name -Urls $tool.Urls -TargetDirectory $tool.Target -BinaryNames $tool.Binaries
+        Install-ToolArchive -Name $tool.Name -Urls $tool.Urls -TargetDirectory $tool.Target -BinaryNames $tool.Binaries -Checksums $tool.Checksums -ManualSteps $tool.ManualSteps
     } catch {
         Write-Warning $_
     }
