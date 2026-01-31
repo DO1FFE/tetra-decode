@@ -32,6 +32,9 @@ function Install-ChocoPackage {
         return
     }
     choco install -y $Name
+    if ($LASTEXITCODE -ne 0) {
+        throw "Chocolatey konnte das Paket '$Name' nicht installieren."
+    }
 }
 
 function Test-ZipFile {
@@ -166,7 +169,11 @@ Ensure-Directory $installRoot
 
 Ensure-Chocolatey
 Install-ChocoPackage -Name zadig
-Install-ChocoPackage -Name sox
+try {
+    Install-ChocoPackage -Name sox.portable
+} catch {
+    Write-Warning "SoX konnte nicht automatisch installiert werden. Bitte installiere es manuell (z. B. 'choco install sox.portable')."
+}
 
 $toolTargets = @(
     @{ Name = 'RTL-SDR Werkzeuge';
