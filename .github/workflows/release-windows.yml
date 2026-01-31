@@ -31,10 +31,13 @@ jobs:
         run: |
           pyinstaller --onefile --windowed sdr_gui.py
 
-      # Optional: Installer bauen (Inno Setup/NSIS/WiX), falls ein entsprechendes Skript vorhanden ist.
-      # - name: Installer bauen
-      #   run: |
-      #     echo "Hier optional Inno Setup/NSIS/WiX aufrufen"
+      - name: Inno Setup installieren
+        run: |
+          choco install innosetup -y
+
+      - name: Installer bauen
+        run: |
+          iscc installer.iss
 
       - name: Release erstellen und Artefakte hochladen
         uses: softprops/action-gh-release@v2
@@ -44,3 +47,4 @@ jobs:
             Automatisch erstellter Release für den Tag ${{ github.ref_name }}.
           files: |
             dist/*.exe
+            dist-installer/*.exe
