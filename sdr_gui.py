@@ -317,7 +317,6 @@ class AudioPlayer(QtCore.QObject):
         self._pa = pyaudio.PyAudio()
         self.agc_level = 10000
         self.activity_threshold = 1000
-        self.activity = QtCore.pyqtSignal()
         self.record_file = None
         self.record_last = 0
 
