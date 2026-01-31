@@ -1,0 +1,46 @@
+name: Windows-Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Abhängigkeiten installieren
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      - name: EXE bauen
+        run: |
+          pyinstaller --onefile --windowed sdr_gui.py
+
+      # Optional: Installer bauen (Inno Setup/NSIS/WiX), falls ein entsprechendes Skript vorhanden ist.
+      # - name: Installer bauen
+      #   run: |
+      #     echo "Hier optional Inno Setup/NSIS/WiX aufrufen"
+
+      - name: Release erstellen und Artefakte hochladen
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Release ${{ github.ref_name }}"
+          body: |
+            Automatisch erstellter Release für den Tag ${{ github.ref_name }}.
+          files: |
+            dist/*.exe
