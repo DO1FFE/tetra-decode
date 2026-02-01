@@ -272,8 +272,61 @@ build_osmo_tetra() {
 install_python_requirements() {
     if command -v python3 >/dev/null 2>&1; then
         log "Installiere Python-Abhängigkeiten..."
+        local ensure_python_pip
+        ensure_python_pip() {
+            if python3 -m pip --version >/dev/null 2>&1; then
+                return 0
+            fi
+            log "pip fehlt für python3. Versuche, pip nachzuinstallieren..."
+            if python3 -m ensurepip --upgrade >/dev/null 2>&1; then
+                return 0
+            fi
+            if ensure_package_manager; then
+                case "${PKG_MANAGER}" in
+                    apt)
+                        install_system_packages python3-pip python3-venv
+                        ;;
+                    dnf)
+                        install_system_packages python3-pip python3-virtualenv || true
+                        ;;
+                    pacman)
+                        install_system_packages python-pip || true
+                        ;;
+                    zypper)
+                        install_system_packages python3-pip || true
+                        ;;
+                esac
+            fi
+            python3 -m pip --version >/dev/null 2>&1
+        }
+
+        local create_venv
+        create_venv() {
+            if python3 -m venv --upgrade-deps "$1" >/dev/null 2>&1; then
+                return 0
+            fi
+            log "Erstellen der virtuellen Umgebung fehlgeschlagen. Installiere python3-venv und versuche erneut..."
+            if ensure_package_manager; then
+                case "${PKG_MANAGER}" in
+                    apt)
+                        install_system_packages python3-venv
+                        ;;
+                    dnf)
+                        install_system_packages python3-virtualenv || true
+                        ;;
+                    pacman)
+                        install_system_packages python-virtualenv || true
+                        ;;
+                    zypper)
+                        install_system_packages python3-virtualenv || true
+                        ;;
+                esac
+            fi
+            python3 -m venv --upgrade-deps "$1"
+        }
         if [[ -n "${VIRTUAL_ENV:-}" ]]; then
             log "Virtuelle Umgebung aktiv: ${VIRTUAL_ENV}. Installiere dort."
+            ensure_python_pip || true
             python3 -m pip install --upgrade pip
             python3 -m pip install -r "${PROJECT_ROOT}/requirements.txt"
             return
@@ -281,19 +334,25 @@ install_python_requirements() {
 
         local venv_path="${PROJECT_ROOT}/.venv"
         log "Keine virtuelle Umgebung aktiv. Verwende ${venv_path}."
-        if [[ ! -d "${venv_path}" ]]; then
+        if [[ ! -d "${venv_path}" || ! -x "${venv_path}/bin/python3" || ! -f "${venv_path}/bin/activate" ]]; then
+            if [[ -d "${venv_path}" ]]; then
+                log "Vorhandene virtuelle Umgebung ist unvollständig. Erstelle sie neu."
+                rm -rf "${venv_path}"
+            fi
             log "Erstelle virtuelle Umgebung in ${venv_path}..."
-            python3 -m venv "${venv_path}"
+            create_venv "${venv_path}"
         fi
 
         if [[ -f "${venv_path}/bin/activate" ]]; then
             # shellcheck source=/dev/null
             source "${venv_path}/bin/activate"
             log "Virtuelle Umgebung aktiviert: ${VIRTUAL_ENV}. Installiere dort."
+            ensure_python_pip || true
             python3 -m pip install --upgrade pip
             python3 -m pip install -r "${PROJECT_ROOT}/requirements.txt"
         else
             log "Aktivierung der virtuellen Umgebung fehlgeschlagen. Installiere Python-Abhängigkeiten mit --user."
+            ensure_python_pip || true
             python3 -m pip install --user -r "${PROJECT_ROOT}/requirements.txt"
         fi
     else
