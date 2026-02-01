@@ -23,7 +23,15 @@ try:
 except Exception:
     requests = None
 
-import numpy as np
+try:
+    import numpy as np
+except Exception:
+    print(
+        "Fehlendes Python-Modul 'numpy'. Bitte installiere es, z. B. mit "
+        "'python3 -m pip install numpy'.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 from PyQt5 import QtWidgets, QtCore
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
