@@ -61,6 +61,10 @@ python -m pip install -r requirements.txt
 
 Wenn die Installation von `pyaudio` mit der Fehlermeldung `portaudio.h: No such file or directory` abbricht, fehlen die PortAudio-Entwicklungsheaders. Installiere sie je nach Distribution (z. B. `portaudio19-dev` unter APT bzw. `portaudio-devel` unter DNF/Zypper oder `portaudio` unter Pacman) und starte danach `install.sh` erneut.
 
+### Hinweis zu PyQt5 (Linux)
+
+Falls beim Start die Meldung `ImportError: libgthread-2.0.so.0: cannot open shared object file` erscheint, fehlt die GLib-Laufzeitbibliothek. Installiere sie über den Paketmanager (z. B. `libglib2.0-0` unter APT, `glib2` unter DNF/Zypper/Pacman) und starte das Programm danach erneut.
+
 Auf Windows führst du stattdessen `setup.ps1` in einer administrativen PowerShell aus. Das Skript lädt fehlende Abhängigkeiten automatisch herunter, richtet die rtl-sdr-Hilfsprogramme sowie die osmocom-tetra-Binaries in `%ProgramData%\tetra-decode` ein und ergänzt den `PATH`. Chocolatey (wird bei Bedarf installiert) sorgt zusätzlich für Werkzeuge wie **Zadig** und SoX. Sollten einzelne Download-Quellen temporär nicht erreichbar sein, weist dich das Skript darauf hin und bietet die Möglichkeit zur manuellen Nachinstallation:
 
 ```powershell

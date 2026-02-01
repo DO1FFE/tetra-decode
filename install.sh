@@ -273,6 +273,21 @@ install_python_requirements() {
     if command -v python3 >/dev/null 2>&1; then
         log "Installiere Python-Abhängigkeiten..."
         if ensure_package_manager; then
+            log "Installiere Laufzeitbibliotheken für PyQt5 (glib/gthread)..."
+            case "${PKG_MANAGER}" in
+                apt)
+                    install_system_packages libglib2.0-0
+                    ;;
+                dnf)
+                    install_system_packages glib2 || true
+                    ;;
+                pacman)
+                    install_system_packages glib2 || true
+                    ;;
+                zypper)
+                    install_system_packages glib2 || true
+                    ;;
+            esac
             log "Installiere Audio-Entwicklungsbibliotheken für PyAudio..."
             case "${PKG_MANAGER}" in
                 apt)

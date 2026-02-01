@@ -47,7 +47,7 @@ install_packages() {
                 autoconf automake libtool \
                 libfftw3-dev libitpp-dev libusb-1.0-0-dev libpcsclite-dev \
                 libgnutls28-dev libboost-all-dev libgmp-dev liborc-0.4-dev \
-                rtl-sdr sox
+                libglib2.0-0 rtl-sdr sox
             # osmocom-Abhängigkeiten
             run_sudo apt-get install -y libosmocore-dev libosmo-dsp-dev || true
             if ! dpkg -s libosmocore-dev >/dev/null 2>&1; then
@@ -64,20 +64,21 @@ install_packages() {
                 git wget curl cmake ninja-build autoconf automake libtool \
                 fftw-devel itpp-devel \
                 libusbx-devel pcsclite-devel gnutls-devel boost-devel gmp-devel orc-devel \
+                glib2 \
                 rtl-sdr sox || true
             ;;
         pacman)
             log "Verwende pacman, um Systemabhängigkeiten zu installieren."
             run_sudo pacman -Sy --noconfirm --needed \
                 base-devel git wget curl cmake ninja autoconf automake libtool \
-                fftw libusb pcsclite gnutls boost-libs gmp orc sox rtl-sdr || true
+                fftw libusb pcsclite gnutls boost-libs gmp orc glib2 sox rtl-sdr || true
             ;;
         zypper)
             log "Verwende zypper, um Systemabhängigkeiten zu installieren."
             run_sudo zypper refresh
             run_sudo zypper install -y \
                 -t pattern devel_C_C++ git wget curl cmake ninja autoconf automake libtool fftw3-devel itpp-devel libusb-1_0-devel pcsclite-devel \
-                libgnutls-devel libboost_headers-devel libgmp-devel orc-devel rtl-sdr sox || true
+                libgnutls-devel libboost_headers-devel libgmp-devel orc-devel glib2 rtl-sdr sox || true
             ;;
         *)
             log "Kein unterstützter Paketmanager gefunden. Überspringe Systempakete."
