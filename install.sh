@@ -195,8 +195,22 @@ build_osmo_tetra() {
         (cd "${BUILD_DIR}/osmo-tetra" && GIT_TERMINAL_PROMPT=0 git pull --ff-only)
     fi
 
+    if [[ ! -f "${BUILD_DIR}/osmo-tetra/configure.ac" && ! -f "${BUILD_DIR}/osmo-tetra/configure.in" ]]; then
+        log "Das osmo-tetra Repository wirkt unvollständig (keine configure.ac/configure.in). Versuche eine Neu-Klonung vom Mirror."
+        rm -rf "${BUILD_DIR}/osmo-tetra"
+        if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 "${osmo_tetra_mirror_url}" "${BUILD_DIR}/osmo-tetra"; then
+            log "Neu-Klonung vom Mirror ist fehlgeschlagen. Bitte entferne ${BUILD_DIR}/osmo-tetra manuell und versuche es erneut."
+            return 1
+        fi
+    fi
+
     pushd "${BUILD_DIR}/osmo-tetra" >/dev/null
     if [[ ! -f configure ]]; then
+        if [[ ! -f configure.ac && ! -f configure.in ]]; then
+            log "configure.ac/configure.in fehlt weiterhin. Das Repository ist vermutlich beschädigt oder nutzt ein anderes Build-System."
+            log "Bitte prüfe die Repo-Quelle oder klone manuell erneut."
+            return 1
+        fi
         if [[ -f autogen.sh ]]; then
             log "Führe autogen.sh aus..."
             if ! ./autogen.sh; then
