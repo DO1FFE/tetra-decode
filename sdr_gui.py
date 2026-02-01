@@ -3,6 +3,7 @@ import sys
 import subprocess
 import threading
 import shutil
+import argparse
 from collections import deque
 import logging
 from logging.handlers import TimedRotatingFileHandler
@@ -171,6 +172,29 @@ def _qt_xcb_verfuegbar() -> bool:
     return False
 
 
+def _parse_frequenzbereich(parser: argparse.ArgumentParser, werte):
+    if werte is None:
+        return None
+    start_mhz, end_mhz = werte
+    if start_mhz <= 0 or end_mhz <= 0 or end_mhz <= start_mhz:
+        parser.error("Der Frequenzbereich muss zwei positive Werte in MHz (Start < Ende) enthalten.")
+    return start_mhz, end_mhz
+
+
+def _resolve_device(geraete, name, index):
+    if index is not None:
+        for label, device_id in geraete:
+            if device_id == index:
+                return label, index
+    if name:
+        for label, device_id in geraete:
+            if label == name:
+                return label, device_id
+    if geraete:
+        return geraete[0]
+    return "RTL-SDR", None
+
+
 def _starte_cli_modus(fehlermeldung: str) -> None:
     print(fehlermeldung, file=sys.stderr)
     print("Starte das Programm im Kommandozeilenmodus.", file=sys.stderr)
@@ -185,19 +209,159 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             print(f"- {name} (Index {index})")
     print("\nBeende den CLI-Modus mit Strg+C.")
 
+    config = load_config()
+    parser = argparse.ArgumentParser(
+        prog="tetra-decode",
+        description="TETRA-Decoder im CLI-Modus",
+    )
+    parser.add_argument(
+        "--geraet-name",
+        help="Name des SDR-Geräts (wie in der Geräte-Liste angezeigt).",
+    )
+    parser.add_argument(
+        "--geraet-index",
+        type=int,
+        help="Index des SDR-Geräts (z. B. 0).",
+    )
+    parser.add_argument(
+        "--ppm",
+        type=int,
+        help="PPM-Korrektur für den SDR-Empfänger.",
+    )
+    parser.add_argument(
+        "--frequenzbereich",
+        nargs=2,
+        type=float,
+        metavar=("START_MHZ", "ENDE_MHZ"),
+        help="Frequenzbereich in MHz (z. B. 380 430).",
+    )
+    auto_group = parser.add_mutually_exclusive_group()
+    auto_group.add_argument(
+        "--auto-dekodierung",
+        dest="auto_dekodierung",
+        action="store_true",
+        help="Automatische Dekodierung nach der Frequenzauswahl aktivieren.",
+    )
+    auto_group.add_argument(
+        "--kein-auto-dekodierung",
+        dest="auto_dekodierung",
+        action="store_false",
+        help="Automatische Dekodierung deaktivieren.",
+    )
+    audio_group = parser.add_mutually_exclusive_group()
+    audio_group.add_argument(
+        "--audio-wiedergabe",
+        dest="audio_wiedergabe",
+        action="store_true",
+        help="Dekodiertes Audio wiedergeben.",
+    )
+    audio_group.add_argument(
+        "--kein-audio-wiedergabe",
+        dest="audio_wiedergabe",
+        action="store_false",
+        help="Audio-Wiedergabe deaktivieren.",
+    )
+    record_group = parser.add_mutually_exclusive_group()
+    record_group.add_argument(
+        "--audio-record",
+        dest="audio_record",
+        action="store_true",
+        help="Dekodiertes Audio als WAV speichern (setzt Audio-Wiedergabe voraus).",
+    )
+    record_group.add_argument(
+        "--kein-audio-record",
+        dest="audio_record",
+        action="store_false",
+        help="Audio-Aufnahme deaktivieren.",
+    )
+    parser.set_defaults(auto_dekodierung=None, audio_wiedergabe=None, audio_record=None)
+
+    args = parser.parse_args()
+    override_config = False
+
+    ppm = config.get("ppm", 0)
+    if args.ppm is not None:
+        ppm = args.ppm
+        config["ppm"] = ppm
+        override_config = True
+
+    frequenzbereich = _parse_frequenzbereich(parser, args.frequenzbereich)
+    if frequenzbereich is None:
+        start_mhz = config.get("cli_freq_start_mhz")
+        end_mhz = config.get("cli_freq_end_mhz")
+        if start_mhz is not None and end_mhz is not None:
+            frequenzbereich = (float(start_mhz), float(end_mhz))
+        else:
+            frequenzbereich = (380.0, 430.0)
+    else:
+        config["cli_freq_start_mhz"] = frequenzbereich[0]
+        config["cli_freq_end_mhz"] = frequenzbereich[1]
+        override_config = True
+
+    auto_dekodierung = config.get("cli_auto_decode", True)
+    if args.auto_dekodierung is not None:
+        auto_dekodierung = args.auto_dekodierung
+        config["cli_auto_decode"] = auto_dekodierung
+        override_config = True
+
+    audio_wiedergabe = config.get("cli_play_audio", False)
+    if args.audio_wiedergabe is not None:
+        audio_wiedergabe = args.audio_wiedergabe
+        config["cli_play_audio"] = audio_wiedergabe
+        override_config = True
+
+    audio_record = config.get("cli_record_audio", False)
+    if args.audio_record is not None:
+        audio_record = args.audio_record
+        config["cli_record_audio"] = audio_record
+        override_config = True
+
+    device_name = args.geraet_name if args.geraet_name is not None else config.get("cli_device_name")
+    device_id = args.geraet_index if args.geraet_index is not None else config.get("cli_device_id")
+    if isinstance(device_id, str) and device_id.strip().isdigit():
+        device_id = int(device_id)
+    if args.geraet_name is not None:
+        config["cli_device_name"] = device_name
+        override_config = True
+    if args.geraet_index is not None:
+        config["cli_device_id"] = device_id
+        override_config = True
+
+    device_name, device_id = _resolve_device(geraete, device_name, device_id)
+
+    if override_config:
+        save_config(config)
+
     app = QtCore.QCoreApplication([])
 
     class CLIRunner(QtCore.QObject):
-        def __init__(self, device_name: str, device_id: int | None):
+        def __init__(
+            self,
+            device_name: str,
+            device_id: int | None,
+            ppm: int,
+            freq_range_mhz: tuple[float, float],
+            auto_decode: bool,
+            play_audio: bool,
+            record_audio: bool,
+        ):
             super().__init__()
             self._device_name = device_name
             self._device_id = device_id
-            self._scanner = SDRScanner(device=device_name, ppm=0, parent=self)
-            self._decoder = TetraDecoder(ppm=0, parent=self)
+            self._scanner = SDRScanner(device=device_name, ppm=ppm, parent=self)
+            self._decoder = TetraDecoder(ppm=ppm, parent=self)
             self._decoder.device_id = device_id
             self._scanner.device_id = device_id
             self._current_frequency = None
             self._last_peak = None
+            self._freq_range_mhz = freq_range_mhz
+            self._auto_decode = auto_decode
+            self._play_audio = play_audio
+            self._record_audio = record_audio
+            self._dec_audio_player = None
+            if self._play_audio:
+                self._dec_audio_player = DecodedAudioPlayer(parent=self)
+                self._decoder.audio.connect(self._dec_audio_player.process)
 
             self._scanner.spectrum_ready.connect(self._handle_spectrum)
             self._scanner.frequency_selected.connect(self._handle_frequency)
@@ -205,11 +369,15 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             self._decoder.finished.connect(self._decoder_finished)
 
         def start(self):
-            self._scanner.start()
+            start_hz = self._freq_range_mhz[0] * 1e6
+            end_hz = self._freq_range_mhz[1] * 1e6
+            self._scanner.start(start_hz, end_hz)
 
         def stop(self):
             self._scanner.stop()
             self._decoder.stop()
+            if self._dec_audio_player:
+                self._dec_audio_player.stop()
 
         @QtCore.pyqtSlot(np.ndarray, np.ndarray)
         def _handle_spectrum(self, freqs, powers):
@@ -229,8 +397,16 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             if self._current_frequency and abs(freq - self._current_frequency) < 1:
                 return
             self._current_frequency = freq
+            if not self._auto_decode:
+                print(
+                    f"Frequenz {freq/1e6:.3f} MHz erkannt (Auto-Dekodierung aus).",
+                    flush=True,
+                )
+                return
             print(f"Starte Dekoder auf {freq/1e6:.3f} MHz", flush=True)
             self._decoder.stop()
+            if self._dec_audio_player:
+                self._dec_audio_player.start(record=self._record_audio)
             self._decoder.start(freq)
 
         @QtCore.pyqtSlot(str)
@@ -242,13 +418,33 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
         @QtCore.pyqtSlot()
         def _decoder_finished(self):
             print("Dekoder gestoppt.", flush=True)
+            if self._dec_audio_player:
+                self._dec_audio_player.stop()
 
-    if geraete:
-        device_name, device_id = geraete[0]
+    if device_id is None:
+        device_text = "ohne Index"
     else:
-        device_name, device_id = "RTL-SDR", 0
+        device_text = f"Index {device_id}"
+    print(
+        "CLI-Start mit Gerät "
+        f"{device_text} ({device_name}), "
+        f"PPM {ppm}, "
+        f"Frequenzbereich {frequenzbereich[0]:.1f}-{frequenzbereich[1]:.1f} MHz, "
+        f"Auto-Dekodierung {'an' if auto_dekodierung else 'aus'}, "
+        f"Audio {'an' if audio_wiedergabe else 'aus'}"
+        + (", Aufnahme an" if audio_record else ""),
+        flush=True,
+    )
 
-    runner = CLIRunner(device_name, device_id)
+    runner = CLIRunner(
+        device_name,
+        device_id,
+        ppm,
+        frequenzbereich,
+        auto_dekodierung,
+        audio_wiedergabe,
+        audio_record,
+    )
     runner.start()
     try:
         while True:
