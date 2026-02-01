@@ -122,7 +122,23 @@ ensure_build_dependencies() {
                 autoconf automake libtool \
                 libfftw3-dev libitpp-dev libusb-1.0-0-dev libpcsclite-dev \
                 libgnutls28-dev libboost-all-dev libgmp-dev liborc-0.4-dev
-            install_system_packages libosmocore-dev libosmo-dsp-dev || true
+            if apt-cache show libosmo-dsp-dev >/dev/null 2>&1; then
+                install_system_packages libosmocore-dev libosmo-dsp-dev || true
+            else
+                if apt-cache policy libosmo-dsp-dev >/dev/null 2>&1; then
+                    local osmo_dsp_kandidat
+                    osmo_dsp_kandidat=$(apt-cache policy libosmo-dsp-dev 2>/dev/null | awk '/Candidate:/ {print $2}')
+                    if [[ -n "${osmo_dsp_kandidat}" && "${osmo_dsp_kandidat}" != "(none)" ]]; then
+                        install_system_packages libosmocore-dev libosmo-dsp-dev || true
+                    else
+                        install_system_packages libosmocore-dev || true
+                        log "libosmo-dsp-dev ist in den APT-Quellen nicht verfügbar. Prüfe die Osmocom-Paketquelle oder nutze eine Alternative (z. B. Build aus den Quellen). Installation von libosmo-dsp-dev wird übersprungen."
+                    fi
+                else
+                    install_system_packages libosmocore-dev || true
+                    log "libosmo-dsp-dev ist in den APT-Quellen nicht verfügbar. Prüfe die Osmocom-Paketquelle oder nutze eine Alternative (z. B. Build aus den Quellen). Installation von libosmo-dsp-dev wird übersprungen."
+                fi
+            fi
             ;;
         dnf)
             install_system_packages @"Development Tools" @"C Development Tools and Libraries" \
