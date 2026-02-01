@@ -16,6 +16,7 @@ import time
 import tempfile
 import pkgutil
 import ctypes.util
+import shlex
 try:
     import qdarkstyle
 except Exception:
@@ -429,6 +430,7 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             self._scanner.device_id = device_id
             self._current_frequency = None
             self._last_peak = None
+            self._last_spectrum = None
             self._freq_range_mhz = freq_range_mhz
             self._auto_decode = auto_decode
             self._play_audio = play_audio
@@ -440,6 +442,8 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             self.cells = {}
             self.packet_counts = {}
             self.talkgroups = {}
+            self._manual_lock = False
+            self._stdin_thread = None
             self._dec_audio_player = None
             if self._play_audio:
                 self._dec_audio_player = DecodedAudioPlayer(parent=self)
@@ -454,6 +458,7 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             start_hz = self._freq_range_mhz[0] * 1e6
             end_hz = self._freq_range_mhz[1] * 1e6
             self._scanner.start(start_hz, end_hz)
+            self._start_cli_input_thread()
 
         def stop(self):
             self._scanner.stop()
@@ -471,6 +476,7 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
         def _handle_spectrum(self, freqs, powers):
             if freqs is None or powers is None or len(freqs) == 0 or len(powers) == 0:
                 return
+            self._last_spectrum = (np.array(freqs, copy=True), np.array(powers, copy=True))
             max_idx = int(np.argmax(powers))
             freq = float(freqs[max_idx])
             power = float(powers[max_idx])
@@ -482,9 +488,22 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
 
         @QtCore.pyqtSlot(float)
         def _handle_frequency(self, freq):
+            if self._manual_lock:
+                print(
+                    f"Automatische Frequenz ignoriert (Manuell aktiv): {freq/1e6:.3f} MHz",
+                    flush=True,
+                )
+                return
             if self._current_frequency and abs(freq - self._current_frequency) < 1:
                 return
+            self._set_frequency_and_process(freq, source="scan")
+
+        def _set_frequency_and_process(self, freq: float, source: str = "manual"):
             self._current_frequency = freq
+            if source == "manual":
+                print(f"Manuell ausgewählt: {freq/1e6:.3f} MHz", flush=True)
+            else:
+                print(f"Gewählte Frequenz: {freq/1e6:.3f} MHz", flush=True)
             if not self._auto_decode:
                 print(
                     f"Frequenz {freq/1e6:.3f} MHz erkannt (Auto-Dekodierung aus).",
@@ -527,6 +546,104 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             print("Dekoder gestoppt.", flush=True)
             if self._dec_audio_player:
                 self._dec_audio_player.stop()
+
+        def _set_manual_lock(self, enabled: bool):
+            self._manual_lock = enabled
+            status = "Manuell" if enabled else "Automatisch"
+            print(f"Modus gewechselt: {status}", flush=True)
+
+        def _start_cli_input_thread(self):
+            if self._stdin_thread and self._stdin_thread.is_alive():
+                return
+            self._stdin_thread = threading.Thread(
+                target=self._cli_input_loop,
+                daemon=True,
+            )
+            self._stdin_thread.start()
+
+        def _cli_input_loop(self):
+            while True:
+                try:
+                    line = sys.stdin.readline()
+                except Exception:
+                    break
+                if not line:
+                    break
+                cmd = line.strip()
+                if not cmd:
+                    continue
+                QtCore.QMetaObject.invokeMethod(
+                    self,
+                    "_handle_cli_command",
+                    QtCore.Qt.QueuedConnection,
+                    QtCore.Q_ARG(str, cmd),
+                )
+
+        @QtCore.pyqtSlot(str)
+        def _handle_cli_command(self, command: str):
+            try:
+                parts = shlex.split(command)
+            except ValueError as exc:
+                print(f"Ungültige Eingabe: {exc}", flush=True)
+                return
+            if not parts:
+                return
+            cmd = parts[0].lower()
+            if cmd == "lock":
+                self._set_manual_lock(True)
+                return
+            if cmd == "unlock":
+                self._set_manual_lock(False)
+                return
+            if cmd == "freq":
+                if len(parts) < 2:
+                    print("Bitte eine Frequenz in MHz angeben: freq <MHz>", flush=True)
+                    return
+                try:
+                    mhz = float(parts[1])
+                except ValueError:
+                    print("Ungültige Frequenz. Beispiel: freq 395.625", flush=True)
+                    return
+                self._set_manual_lock(True)
+                self._set_frequency_and_process(mhz * 1e6, source="manual")
+                return
+            if cmd == "save-png":
+                png_dir = None
+                rest = parts[1:]
+                for idx, arg in enumerate(rest):
+                    if arg.startswith("--png-dir="):
+                        png_dir = arg.split("=", 1)[1] or None
+                        continue
+                    if arg == "--png-dir":
+                        if idx + 1 >= len(rest):
+                            print("Bitte Verzeichnis nach --png-dir angeben.", flush=True)
+                            return
+                        png_dir = rest[idx + 1]
+                self.save_spectrum_png(png_dir)
+                return
+            print(
+                "Unbekannter Befehl. Verfügbar: lock, unlock, freq <MHz>, save-png [--png-dir <Pfad>]",
+                flush=True,
+            )
+
+        def save_spectrum_png(self, png_dir: str | None = None):
+            if not self._last_spectrum:
+                print("Kein Spektrum zum Speichern vorhanden.", flush=True)
+                return
+            freqs, powers = self._last_spectrum
+            ziel = png_dir or os.path.expanduser("~/TetraScans")
+            os.makedirs(ziel, exist_ok=True)
+            fname = datetime.now().strftime("scan_%Y%m%d_%H%M%S.png")
+            fig = Figure(figsize=(8, 4))
+            ax = fig.add_subplot(1, 1, 1)
+            ax.plot(freqs / 1e6, powers, linewidth=1.0)
+            ax.set_xlabel("Frequenz (MHz)")
+            ax.set_ylabel("Leistung (dB)")
+            ax.set_title("Spektrum")
+            ax.grid(True, linestyle="--", alpha=0.4)
+            fig.tight_layout()
+            fig.savefig(os.path.join(ziel, fname))
+            print(f"Spektrum gespeichert: {os.path.join(ziel, fname)}", flush=True)
 
         def export_cells_csv(self, path: str):
             try:
