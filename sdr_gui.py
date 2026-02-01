@@ -146,6 +146,25 @@ def _qt_xcb_verfuegbar() -> bool:
     return False
 
 
+def _starte_cli_modus(fehlermeldung: str) -> None:
+    print(fehlermeldung, file=sys.stderr)
+    print("Starte das Programm im Kommandozeilenmodus.", file=sys.stderr)
+    print("\n=== TETRA-Decoder (CLI-Modus) ===")
+    print("Hinweis: Für die grafische Oberfläche müssen X11/Qt-xcb verfügbar sein.")
+    print("\nGefundene SDR-Geräte:")
+    for name, index in list_sdr_devices():
+        if index is None:
+            print(f"- {name}")
+        else:
+            print(f"- {name} (Index {index})")
+    print("\nBeende den CLI-Modus mit Strg+C.")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nCLI-Modus beendet.")
+
+
 class SetupWorker(QtCore.QThread):
     """Prüft externe Werkzeuge und Python-Module und installiert sie."""
 
@@ -1496,27 +1515,25 @@ class MainWindow(QtWidgets.QMainWindow):
 
 if __name__ == "__main__":
     if not _qt_xcb_verfuegbar():
-        print(
+        _starte_cli_modus(
             "Qt-Plugin 'xcb' nicht gefunden. Bitte installiere die fehlenden "
             "System-Pakete für X11/Qt-xcb (z. B. libxcb, libxkbcommon-x11) oder "
             "starte das Programm in einer Umgebung mit grafischer Oberfläche. "
             "Alternativ kannst du 'QT_QPA_PLATFORM=offscreen' setzen, wenn eine "
-            "headless Ausführung gewünscht ist.",
-            file=sys.stderr,
+            "headless Ausführung gewünscht ist."
         )
-        raise SystemExit(1)
+        raise SystemExit(0)
 
     try:
         app = QtWidgets.QApplication(sys.argv)
     except Exception as exc:
-        print(
+        _starte_cli_modus(
             "Qt konnte nicht gestartet werden. Bitte prüfe, ob die X11/Qt-xcb "
             "System-Pakete installiert sind oder ob du dich in einer headless "
             "Umgebung befindest. Fehlerdetails: "
-            f"{exc}",
-            file=sys.stderr,
+            f"{exc}"
         )
-        raise SystemExit(1)
+        raise SystemExit(0)
     app.setStyle("Fusion")
     w = MainWindow()
     w.show()
