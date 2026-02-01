@@ -235,6 +235,19 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
         metavar=("START_MHZ", "ENDE_MHZ"),
         help="Frequenzbereich in MHz (z. B. 380 430).",
     )
+    parser.add_argument(
+        "--filter-regex",
+        help="Regex-Filter f\u00fcr die Ausgabe im CLI-Modus.",
+    )
+    parser.add_argument(
+        "--talkgroup",
+        action="append",
+        help="Sprechgruppen-ID f\u00fcr die Anzeige (mehrfach nutzbar).",
+    )
+    parser.add_argument(
+        "--talkgroups-file",
+        help="Datei mit Sprechgruppen-IDs (eine pro Zeile oder kommagetrennt).",
+    )
     auto_group = parser.add_mutually_exclusive_group()
     auto_group.add_argument(
         "--auto-dekodierung",
@@ -316,6 +329,54 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
         config["cli_record_audio"] = audio_record
         override_config = True
 
+    filter_regex = config.get("cli_filter_regex", "")
+    if args.filter_regex is not None:
+        filter_regex = args.filter_regex
+        config["cli_filter_regex"] = filter_regex
+        override_config = True
+
+    selected_talkgroups = set()
+    gespeicherte_talkgroups = config.get("selected_talkgroups", [])
+    if isinstance(gespeicherte_talkgroups, list):
+        selected_talkgroups.update(str(tg_id) for tg_id in gespeicherte_talkgroups)
+
+    def _parse_talkgroup_tokens(tokens):
+        ids = set()
+        for token in filter(None, tokens):
+            token = str(token).strip()
+            if not token:
+                continue
+            found = extract_talkgroup_ids(token)
+            if found:
+                ids.update(found)
+            else:
+                for part in re.split(r"[,\s]+", token):
+                    part = part.strip()
+                    if part:
+                        ids.add(part)
+        return ids
+
+    if args.talkgroup:
+        selected_talkgroups = _parse_talkgroup_tokens(args.talkgroup)
+        config["selected_talkgroups"] = sorted(selected_talkgroups)
+        override_config = True
+
+    if args.talkgroups_file:
+        file_ids = set()
+        try:
+            with open(args.talkgroups_file, "r") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    file_ids.update(_parse_talkgroup_tokens([line]))
+        except OSError as exc:
+            print(f"Warnung: Konnte Sprechgruppen-Datei nicht lesen: {exc}", file=sys.stderr)
+        else:
+            selected_talkgroups = file_ids
+            config["selected_talkgroups"] = sorted(selected_talkgroups)
+            override_config = True
+
     device_name = args.geraet_name if args.geraet_name is not None else config.get("cli_device_name")
     device_id = args.geraet_index if args.geraet_index is not None else config.get("cli_device_id")
     if isinstance(device_id, str) and device_id.strip().isdigit():
@@ -344,6 +405,8 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             auto_decode: bool,
             play_audio: bool,
             record_audio: bool,
+            filter_regex: str,
+            selected_talkgroups: set[str],
         ):
             super().__init__()
             self._device_name = device_name
@@ -358,6 +421,8 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             self._auto_decode = auto_decode
             self._play_audio = play_audio
             self._record_audio = record_audio
+            self._filter_regex = filter_regex
+            self.selected_talkgroups = selected_talkgroups
             self._dec_audio_player = None
             if self._play_audio:
                 self._dec_audio_player = DecodedAudioPlayer(parent=self)
@@ -411,9 +476,25 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
 
         @QtCore.pyqtSlot(str)
         def _handle_decoder_output(self, line: str):
+            if not self._line_matches_selected_talkgroup(line):
+                return
+            if self._filter_regex:
+                try:
+                    if not re.search(self._filter_regex, line):
+                        return
+                except re.error:
+                    pass
             print(line, flush=True)
             for tg_id in extract_talkgroup_ids(line):
                 print(f"Talkgroup {tg_id} empfangen", flush=True)
+
+        def _line_matches_selected_talkgroup(self, line: str) -> bool:
+            if not self.selected_talkgroups:
+                return True
+            ids = extract_talkgroup_ids(line)
+            if not ids:
+                return False
+            return any(tg_id in self.selected_talkgroups for tg_id in ids)
 
         @QtCore.pyqtSlot()
         def _decoder_finished(self):
@@ -444,6 +525,8 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
         auto_dekodierung,
         audio_wiedergabe,
         audio_record,
+        filter_regex,
+        selected_talkgroups,
     )
     runner.start()
     try:
