@@ -272,6 +272,23 @@ build_osmo_tetra() {
 install_python_requirements() {
     if command -v python3 >/dev/null 2>&1; then
         log "Installiere Python-Abhängigkeiten..."
+        if ensure_package_manager; then
+            log "Installiere Audio-Entwicklungsbibliotheken für PyAudio..."
+            case "${PKG_MANAGER}" in
+                apt)
+                    install_system_packages portaudio19-dev
+                    ;;
+                dnf)
+                    install_system_packages portaudio-devel || true
+                    ;;
+                pacman)
+                    install_system_packages portaudio || true
+                    ;;
+                zypper)
+                    install_system_packages portaudio-devel || true
+                    ;;
+            esac
+        fi
         local ensure_python_pip
         ensure_python_pip() {
             if python3 -m pip --version >/dev/null 2>&1; then

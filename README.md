@@ -47,6 +47,10 @@ Falls du einzelne Komponenten später nachrüsten musst, führt `install.sh` ein
 ./install.sh
 ```
 
+### Hinweis zu PyAudio (Linux)
+
+Wenn die Installation von `pyaudio` mit der Fehlermeldung `portaudio.h: No such file or directory` abbricht, fehlen die PortAudio-Entwicklungsheaders. Installiere sie je nach Distribution (z. B. `portaudio19-dev` unter APT bzw. `portaudio-devel` unter DNF/Zypper oder `portaudio` unter Pacman) und starte danach `install.sh` erneut.
+
 Auf Windows führst du stattdessen `setup.ps1` in einer administrativen PowerShell aus. Das Skript lädt fehlende Abhängigkeiten automatisch herunter, richtet die rtl-sdr-Hilfsprogramme sowie die osmocom-tetra-Binaries in `%ProgramData%\tetra-decode` ein und ergänzt den `PATH`. Chocolatey (wird bei Bedarf installiert) sorgt zusätzlich für Werkzeuge wie **Zadig** und SoX. Sollten einzelne Download-Quellen temporär nicht erreichbar sein, weist dich das Skript darauf hin und bietet die Möglichkeit zur manuellen Nachinstallation:
 
 ```powershell
