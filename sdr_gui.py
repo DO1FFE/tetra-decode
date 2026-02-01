@@ -2213,6 +2213,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 if __name__ == "__main__":
+    cli_parser = argparse.ArgumentParser(add_help=False)
+    cli_parser.add_argument("--cli", action="store_true")
+    cli_args, rest_args = cli_parser.parse_known_args()
+    if cli_args.cli:
+        sys.argv = [sys.argv[0]] + rest_args
+        _starte_cli_modus("CLI-Modus wurde per --cli angefordert.")
+        raise SystemExit(0)
+
     if not _qt_xcb_verfuegbar():
         _starte_cli_modus(
             "Qt-Plugin 'xcb' nicht gefunden. Bitte installiere die fehlenden "

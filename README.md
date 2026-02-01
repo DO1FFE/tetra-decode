@@ -10,6 +10,7 @@ Das Programm startest du mit:
 
 ```bash
 python sdr_gui.py
+python sdr_gui.py --cli
 ```
 
 Externe SDR-Werkzeuge sowie die osmocom-tetra-Binärdateien müssen installiert und im Systempfad verfügbar sein.
@@ -108,6 +109,7 @@ Das Programm startest du mit:
 
 ```bash
 python sdr_gui.py
+python sdr_gui.py --cli
 ```
 
 Externe SDR-Werkzeuge sowie die osmocom-tetra-Binärdateien müssen installiert und im Systempfad verfügbar sein.
