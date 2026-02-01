@@ -181,8 +181,35 @@ build_osmo_tetra() {
 
     pushd "${BUILD_DIR}/osmo-tetra" >/dev/null
     if [[ ! -f configure ]]; then
-        log "Führe autogen.sh aus..."
-        ./autogen.sh
+        if [[ -f autogen.sh ]]; then
+            log "Führe autogen.sh aus..."
+            if ! ./autogen.sh; then
+                log "autogen.sh ist fehlgeschlagen. Prüfe die Ausgabe und installiere fehlende Autotools-Pakete, dann erneut ausführen."
+                return 1
+            fi
+        elif [[ -f bootstrap ]]; then
+            log "autogen.sh fehlt. Führe bootstrap aus..."
+            if ! ./bootstrap; then
+                log "bootstrap ist fehlgeschlagen. Prüfe die Ausgabe und installiere fehlende Build-Abhängigkeiten, dann erneut ausführen."
+                return 1
+            fi
+        elif [[ -f bootstrap.sh ]]; then
+            log "autogen.sh fehlt. Führe bootstrap.sh aus..."
+            if ! ./bootstrap.sh; then
+                log "bootstrap.sh ist fehlgeschlagen. Prüfe die Ausgabe und installiere fehlende Build-Abhängigkeiten, dann erneut ausführen."
+                return 1
+            fi
+        else
+            log "Kein autogen.sh/bootstrap gefunden. Führe autoreconf -fi aus (benötigt autoconf/automake/libtool)."
+            if ! autoreconf -fi; then
+                log "autoreconf -fi ist fehlgeschlagen. Bitte installiere autoconf/automake/libtool und wiederhole den Schritt."
+                return 1
+            fi
+        fi
+        if [[ ! -f configure ]]; then
+            log "Konfigurationsskript wurde nicht erzeugt. Prüfe die Autotools-Ausgabe und führe den Vorbereitungsschritt erneut aus."
+            return 1
+        fi
     fi
 
     log "Konfiguriere osmocom-tetra..."
