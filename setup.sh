@@ -49,8 +49,13 @@ install_packages() {
                 libgnutls28-dev libboost-all-dev libgmp-dev liborc-0.4-dev \
                 rtl-sdr sox
             # osmocom-Abhängigkeiten
-            run_sudo apt-get install -y libosmocore-dev libosmo-dsp-dev || \
-                log "libosmocore-dev nicht verfügbar. Wird bei Bedarf aus den Quellen gebaut."
+            run_sudo apt-get install -y libosmocore-dev libosmo-dsp-dev || true
+            if ! dpkg -s libosmocore-dev >/dev/null 2>&1; then
+                log "libosmocore-dev ist nicht installiert. Es findet kein automatischer Quell-Build statt; bitte manuell installieren oder aus den Quellen bauen."
+            fi
+            if ! dpkg -s libosmo-dsp-dev >/dev/null 2>&1; then
+                log "libosmo-dsp-dev ist nicht installiert. Es findet kein automatischer Quell-Build statt; bitte manuell installieren oder aus den Quellen bauen."
+            fi
             ;;
         dnf)
             log "Verwende dnf, um Systemabhängigkeiten zu installieren."
