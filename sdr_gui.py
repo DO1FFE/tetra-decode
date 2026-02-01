@@ -14,6 +14,7 @@ import wave
 import time
 import tempfile
 import pkgutil
+import ctypes.util
 try:
     import qdarkstyle
 except Exception:
@@ -42,6 +43,17 @@ except Exception:
         )
     print(hinweis, file=sys.stderr)
     raise SystemExit(1)
+if sys.platform.startswith("linux"):
+    libgl = ctypes.util.find_library("GL")
+    if libgl is None:
+        print(
+            "Fehlende Systembibliothek 'libGL.so.1'. Bitte installiere "
+            "'libgl1' (z. B. 'sudo apt-get install libgl1') und starte "
+            "das Programm erneut.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
 from PyQt5 import QtWidgets, QtCore
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
