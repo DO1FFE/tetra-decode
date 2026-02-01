@@ -89,12 +89,26 @@ build_osmo_tetra() {
     require_command git
 
     mkdir -p "${BUILD_DIR}"
+    local osmo_tetra_git_url="${OSMO_TETRA_GIT_URL:-https://gitea.osmocom.org/sdr/osmo-tetra.git}"
+    local osmo_tetra_mirror_url="https://github.com/osmocom/osmo-tetra.git"
+
     if [[ ! -d "${BUILD_DIR}/osmo-tetra" ]]; then
-        log "Klone osmocom/osmo-tetra..."
-        git clone --depth 1 https://gitea.osmocom.org/sdr/osmo-tetra.git "${BUILD_DIR}/osmo-tetra"
+        log "Klone osmocom/osmo-tetra von ${osmo_tetra_git_url}..."
+        if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 "${osmo_tetra_git_url}" "${BUILD_DIR}/osmo-tetra"; then
+            if [[ "${osmo_tetra_git_url}" != "${osmo_tetra_mirror_url}" ]]; then
+                log "Klonen fehlgeschlagen. Versuche Mirror ${osmo_tetra_mirror_url}..."
+                GIT_TERMINAL_PROMPT=0 git clone --depth 1 "${osmo_tetra_mirror_url}" "${BUILD_DIR}/osmo-tetra" || {
+                    log "Klonen von osmocom-tetra ist fehlgeschlagen."
+                    return 1
+                }
+            else
+                log "Klonen von osmocom-tetra ist fehlgeschlagen."
+                return 1
+            fi
+        fi
     else
         log "Aktualisiere vorhandenes osmo-tetra Repository..."
-        (cd "${BUILD_DIR}/osmo-tetra" && git pull --ff-only)
+        (cd "${BUILD_DIR}/osmo-tetra" && GIT_TERMINAL_PROMPT=0 git pull --ff-only)
     fi
 
     pushd "${BUILD_DIR}/osmo-tetra" >/dev/null
