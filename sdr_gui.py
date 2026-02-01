@@ -138,6 +138,79 @@ def save_config(cfg: dict):
         pass
 
 
+_MAX_GAIN_CACHE = None
+
+
+def _normalize_gain_setting(value):
+    if value is None:
+        return "max"
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().lower()
+    if text in ("max", "maximum"):
+        return "max"
+    try:
+        return float(text)
+    except ValueError:
+        return "max"
+
+
+def _parse_gain_argument(parser: argparse.ArgumentParser, value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        parser.error("Der Gain-Wert darf nicht leer sein.")
+    lowered = text.lower()
+    if lowered in ("max", "maximum"):
+        return "max"
+    try:
+        return float(text)
+    except ValueError:
+        parser.error("Der Gain-Wert muss eine Zahl in dB oder 'max' sein.")
+
+
+def _parse_gain_values_from_rtl_test(output: str):
+    gains = []
+    in_section = False
+    for line in output.splitlines():
+        if re.search(r"gain values", line, re.IGNORECASE):
+            in_section = True
+        if in_section:
+            gains.extend(
+                float(value) for value in re.findall(r"-?\d+(?:\.\d+)?", line)
+            )
+            if not line.strip():
+                in_section = False
+        if in_section and re.search(r"sampling", line, re.IGNORECASE):
+            in_section = False
+    return max(gains) if gains else None
+
+
+def _ermittle_max_gain():
+    global _MAX_GAIN_CACHE
+    if _MAX_GAIN_CACHE is not None:
+        return _MAX_GAIN_CACHE
+    fallback_gain = 49.6
+    try:
+        out = subprocess.check_output(
+            ["rtl_test", "-t"], text=True, stderr=subprocess.STDOUT, timeout=5
+        )
+    except Exception:
+        _MAX_GAIN_CACHE = fallback_gain
+        return _MAX_GAIN_CACHE
+    parsed_gain = _parse_gain_values_from_rtl_test(out)
+    _MAX_GAIN_CACHE = parsed_gain if parsed_gain is not None else fallback_gain
+    return _MAX_GAIN_CACHE
+
+
+def _resolve_gain_value(setting):
+    normalized = _normalize_gain_setting(setting)
+    if normalized == "max":
+        return _ermittle_max_gain()
+    return float(normalized)
+
+
 def _qt_xcb_verfuegbar() -> bool:
     if not sys.platform.startswith("linux"):
         return True
@@ -230,6 +303,10 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
         help="PPM-Korrektur für den SDR-Empfänger.",
     )
     parser.add_argument(
+        "--gain",
+        help="Gain in dB oder 'max' für den höchsten verfügbaren Gain-Wert.",
+    )
+    parser.add_argument(
         "--frequenzbereich",
         nargs=2,
         type=float,
@@ -307,6 +384,12 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
     if args.ppm is not None:
         ppm = args.ppm
         config["ppm"] = ppm
+        override_config = True
+
+    gain_setting = _normalize_gain_setting(config.get("gain", "max"))
+    if args.gain is not None:
+        gain_setting = _parse_gain_argument(parser, args.gain)
+        config["gain"] = gain_setting
         override_config = True
 
     frequenzbereich = _parse_frequenzbereich(parser, args.frequenzbereich)
@@ -412,6 +495,7 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             device_name: str,
             device_id: int | None,
             ppm: int,
+            gain_setting,
             freq_range_mhz: tuple[float, float],
             auto_decode: bool,
             play_audio: bool,
@@ -424,7 +508,12 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             super().__init__()
             self._device_name = device_name
             self._device_id = device_id
-            self._scanner = SDRScanner(device=device_name, ppm=ppm, parent=self)
+            self._scanner = SDRScanner(
+                device=device_name,
+                ppm=ppm,
+                gain=gain_setting,
+                parent=self,
+            )
             self._decoder = TetraDecoder(ppm=ppm, parent=self)
             self._decoder.device_id = device_id
             self._scanner.device_id = device_id
@@ -733,6 +822,7 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
         f"{device_text} ({device_name}), "
         f"PPM {ppm}, "
         f"Frequenzbereich {frequenzbereich[0]:.1f}-{frequenzbereich[1]:.1f} MHz, "
+        f"Gain {_resolve_gain_value(gain_setting):.1f} dB, "
         f"Auto-Dekodierung {'an' if auto_dekodierung else 'aus'}, "
         f"Audio {'an' if audio_wiedergabe else 'aus'}"
         + (", Aufnahme an" if audio_record else ""),
@@ -743,6 +833,7 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
         device_name,
         device_id,
         ppm,
+        gain_setting,
         frequenzbereich,
         auto_dekodierung,
         audio_wiedergabe,
@@ -897,11 +988,12 @@ class SDRScanner(QtCore.QObject):
     spectrum_ready = QtCore.pyqtSignal(np.ndarray, np.ndarray)
     frequency_selected = QtCore.pyqtSignal(float)
 
-    def __init__(self, device: str, ppm: int = 0, parent=None):
+    def __init__(self, device: str, ppm: int = 0, gain=None, parent=None):
         super().__init__(parent)
         self.device = device
         self.device_id = None
         self.ppm = ppm
+        self.gain = gain
         self._thread = None
         self._running = threading.Event()
         self._process = None
@@ -926,9 +1018,11 @@ class SDRScanner(QtCore.QObject):
             self._thread = None
 
     def _scan(self, f_start, f_end, bin_size):
+        gain_value = _resolve_gain_value(self.gain)
         cmd = [
             "rtl_power",
             "-p", str(self.ppm),
+            "-g", str(gain_value),
             f"-f{f_start/1e6:.0f}M:{f_end/1e6:.0f}M:{int(bin_size)}",
             "-i", "1", "-"
         ]
@@ -980,11 +1074,12 @@ class SDRScanner(QtCore.QObject):
 class AudioPlayer(QtCore.QObject):
     """Empfängt Audio von rtl_fm und spielt es über PyAudio ab."""
 
-    def __init__(self, device: str, ppm: int = 0, parent=None):
+    def __init__(self, device: str, ppm: int = 0, gain=None, parent=None):
         super().__init__(parent)
         self.device = device
         self.device_id = None
         self.ppm = ppm
+        self.gain = gain
         self._process = None
         self._stream = None
         self._pa = pyaudio.PyAudio()
@@ -995,9 +1090,11 @@ class AudioPlayer(QtCore.QObject):
 
     def start(self, frequency):
         self.stop()
+        gain_value = _resolve_gain_value(self.gain)
         cmd = [
             "rtl_fm",
             "-p", str(self.ppm),
+            "-g", str(gain_value),
             "-f", str(int(frequency)),
             "-s", "48000",
             "-"
@@ -1401,10 +1498,12 @@ class MainWindow(QtWidgets.QMainWindow):
             "scheduler_interval": 15,
             "scheduler_enabled": False,
             "ppm": 0,
+            "gain": "max",
             "talkgroups": {},
             "selected_talkgroups": [],
         }
         self.config.update(load_config())
+        self.config["gain"] = _normalize_gain_setting(self.config.get("gain", "max"))
 
         self.manual_lock = False
 
@@ -1416,8 +1515,18 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(self.tabs)
         self.setCentralWidget(central)
 
-        self.scanner = SDRScanner(device=self.device_box.currentText(), ppm=self.config.get("ppm", 0), parent=self)
-        self.player = AudioPlayer(device=self.device_box.currentText(), ppm=self.config.get("ppm", 0), parent=self)
+        self.scanner = SDRScanner(
+            device=self.device_box.currentText(),
+            ppm=self.config.get("ppm", 0),
+            gain=self.config.get("gain", "max"),
+            parent=self,
+        )
+        self.player = AudioPlayer(
+            device=self.device_box.currentText(),
+            ppm=self.config.get("ppm", 0),
+            gain=self.config.get("gain", "max"),
+            parent=self,
+        )
         self.decoder = TetraDecoder(ppm=self.config.get("ppm", 0), parent=self)
         self.dec_audio_player = DecodedAudioPlayer(parent=self)
 
@@ -1845,6 +1954,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.player.device = name
         self.scanner.device_id = device_id
         self.player.device_id = device_id
+        gain_setting = _normalize_gain_setting(self.config.get("gain", "max"))
+        self.config["gain"] = gain_setting
+        self.scanner.gain = gain_setting
+        self.player.gain = gain_setting
         self.decoder.device_id = device_id
         self._update_ppm(self.ppm_spin.value())
         rng = self.freq_range_box.currentData()
