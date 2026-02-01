@@ -120,6 +120,32 @@ def save_config(cfg: dict):
         pass
 
 
+def _qt_xcb_verfuegbar() -> bool:
+    if not sys.platform.startswith("linux"):
+        return True
+
+    qt_platform = os.environ.get("QT_QPA_PLATFORM", "").strip()
+    if qt_platform and qt_platform != "xcb":
+        return True
+
+    plugin_pfade = []
+    env_pfade = [pfad for pfad in os.environ.get("QT_PLUGIN_PATH", "").split(os.pathsep) if pfad]
+    plugin_pfade.extend(env_pfade)
+    plugin_pfade.append(QtCore.QLibraryInfo.location(QtCore.QLibraryInfo.PluginsPath))
+
+    for basis in filter(None, plugin_pfade):
+        plattform_dir = os.path.join(basis, "platforms")
+        if not os.path.isdir(plattform_dir):
+            continue
+        try:
+            for datei in os.listdir(plattform_dir):
+                if datei.startswith("libqxcb.so"):
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 class SetupWorker(QtCore.QThread):
     """Prüft externe Werkzeuge und Python-Module und installiert sie."""
 
@@ -1469,7 +1495,28 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 if __name__ == "__main__":
-    app = QtWidgets.QApplication(sys.argv)
+    if not _qt_xcb_verfuegbar():
+        print(
+            "Qt-Plugin 'xcb' nicht gefunden. Bitte installiere die fehlenden "
+            "System-Pakete für X11/Qt-xcb (z. B. libxcb, libxkbcommon-x11) oder "
+            "starte das Programm in einer Umgebung mit grafischer Oberfläche. "
+            "Alternativ kannst du 'QT_QPA_PLATFORM=offscreen' setzen, wenn eine "
+            "headless Ausführung gewünscht ist.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    try:
+        app = QtWidgets.QApplication(sys.argv)
+    except Exception as exc:
+        print(
+            "Qt konnte nicht gestartet werden. Bitte prüfe, ob die X11/Qt-xcb "
+            "System-Pakete installiert sind oder ob du dich in einer headless "
+            "Umgebung befindest. Fehlerdetails: "
+            f"{exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     app.setStyle("Fusion")
     w = MainWindow()
     w.show()
