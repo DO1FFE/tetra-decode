@@ -102,6 +102,22 @@ def list_sdr_devices():
     return devices or [("RTL-SDR", 0)]
 
 
+def extract_talkgroup_ids(line: str):
+    muster = re.compile(
+        r"\b(?:TGID|TG|talkgroup|group)\s*[:=]?\s*(0x[0-9A-Fa-f]+|\d+)\b",
+        re.IGNORECASE,
+    )
+    ids = []
+    for match in muster.finditer(line):
+        raw = match.group(1)
+        try:
+            value = int(raw, 0)
+            ids.append(str(value))
+        except ValueError:
+            ids.append(raw)
+    return ids
+
+
 def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
@@ -161,17 +177,86 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
     print("\n=== TETRA-Decoder (CLI-Modus) ===")
     print("Hinweis: Für die grafische Oberfläche müssen X11/Qt-xcb verfügbar sein.")
     print("\nGefundene SDR-Geräte:")
-    for name, index in list_sdr_devices():
+    geraete = list_sdr_devices()
+    for name, index in geraete:
         if index is None:
             print(f"- {name}")
         else:
             print(f"- {name} (Index {index})")
     print("\nBeende den CLI-Modus mit Strg+C.")
+
+    app = QtCore.QCoreApplication([])
+
+    class CLIRunner(QtCore.QObject):
+        def __init__(self, device_name: str, device_id: int | None):
+            super().__init__()
+            self._device_name = device_name
+            self._device_id = device_id
+            self._scanner = SDRScanner(device=device_name, ppm=0, parent=self)
+            self._decoder = TetraDecoder(ppm=0, parent=self)
+            self._decoder.device_id = device_id
+            self._scanner.device_id = device_id
+            self._current_frequency = None
+            self._last_peak = None
+
+            self._scanner.spectrum_ready.connect(self._handle_spectrum)
+            self._scanner.frequency_selected.connect(self._handle_frequency)
+            self._decoder.output.connect(self._handle_decoder_output)
+            self._decoder.finished.connect(self._decoder_finished)
+
+        def start(self):
+            self._scanner.start()
+
+        def stop(self):
+            self._scanner.stop()
+            self._decoder.stop()
+
+        @QtCore.pyqtSlot(np.ndarray, np.ndarray)
+        def _handle_spectrum(self, freqs, powers):
+            if freqs is None or powers is None or len(freqs) == 0 or len(powers) == 0:
+                return
+            max_idx = int(np.argmax(powers))
+            freq = float(freqs[max_idx])
+            power = float(powers[max_idx])
+            self._last_peak = (freq, power)
+            print(
+                f"Frequenz {freq/1e6:.3f} MHz, Leistung {power:.1f} dB",
+                flush=True,
+            )
+
+        @QtCore.pyqtSlot(float)
+        def _handle_frequency(self, freq):
+            if self._current_frequency and abs(freq - self._current_frequency) < 1:
+                return
+            self._current_frequency = freq
+            print(f"Starte Dekoder auf {freq/1e6:.3f} MHz", flush=True)
+            self._decoder.stop()
+            self._decoder.start(freq)
+
+        @QtCore.pyqtSlot(str)
+        def _handle_decoder_output(self, line: str):
+            print(line, flush=True)
+            for tg_id in extract_talkgroup_ids(line):
+                print(f"Talkgroup {tg_id} empfangen", flush=True)
+
+        @QtCore.pyqtSlot()
+        def _decoder_finished(self):
+            print("Dekoder gestoppt.", flush=True)
+
+    if geraete:
+        device_name, device_id = geraete[0]
+    else:
+        device_name, device_id = "RTL-SDR", 0
+
+    runner = CLIRunner(device_name, device_id)
+    runner.start()
     try:
         while True:
-            time.sleep(1)
+            app.processEvents()
+            time.sleep(0.1)
     except KeyboardInterrupt:
         print("\nCLI-Modus beendet.")
+        runner.stop()
 
 
 class SetupWorker(QtCore.QThread):
@@ -1407,19 +1492,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_talkgroups_table()
 
     def _extract_talkgroup_ids(self, line: str):
-        muster = re.compile(
-            r"\b(?:TGID|TG|talkgroup|group)\s*[:=]?\s*(0x[0-9A-Fa-f]+|\d+)\b",
-            re.IGNORECASE,
-        )
-        ids = []
-        for match in muster.finditer(line):
-            raw = match.group(1)
-            try:
-                value = int(raw, 0)
-                ids.append(str(value))
-            except ValueError:
-                ids.append(raw)
-        return ids
+        return extract_talkgroup_ids(line)
 
     def _update_talkgroups_table(self):
         if not hasattr(self, "talkgroup_table"):
