@@ -231,8 +231,30 @@ build_osmo_tetra() {
 install_python_requirements() {
     if command -v python3 >/dev/null 2>&1; then
         log "Installiere Python-Abhängigkeiten..."
-        python3 -m pip install --upgrade pip
-        python3 -m pip install -r "${PROJECT_ROOT}/requirements.txt"
+        if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+            log "Virtuelle Umgebung aktiv: ${VIRTUAL_ENV}. Installiere dort."
+            python3 -m pip install --upgrade pip
+            python3 -m pip install -r "${PROJECT_ROOT}/requirements.txt"
+            return
+        fi
+
+        local venv_path="${PROJECT_ROOT}/.venv"
+        log "Keine virtuelle Umgebung aktiv. Verwende ${venv_path}."
+        if [[ ! -d "${venv_path}" ]]; then
+            log "Erstelle virtuelle Umgebung in ${venv_path}..."
+            python3 -m venv "${venv_path}"
+        fi
+
+        if [[ -f "${venv_path}/bin/activate" ]]; then
+            # shellcheck source=/dev/null
+            source "${venv_path}/bin/activate"
+            log "Virtuelle Umgebung aktiviert: ${VIRTUAL_ENV}. Installiere dort."
+            python3 -m pip install --upgrade pip
+            python3 -m pip install -r "${PROJECT_ROOT}/requirements.txt"
+        else
+            log "Aktivierung der virtuellen Umgebung fehlgeschlagen. Installiere Python-Abhängigkeiten mit --user."
+            python3 -m pip install --user -r "${PROJECT_ROOT}/requirements.txt"
+        fi
     else
         log "python3 wurde nicht gefunden. Überspringe Python-Abhängigkeiten."
     fi
