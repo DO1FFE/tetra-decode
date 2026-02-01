@@ -26,11 +26,20 @@ except Exception:
 try:
     import numpy as np
 except Exception:
-    print(
-        "Fehlendes Python-Modul 'numpy'. Bitte installiere es, z. B. mit "
-        "'python3 -m pip install numpy'.",
-        file=sys.stderr,
-    )
+    pip_verfuegbar = importlib.util.find_spec("pip") is not None
+    if pip_verfuegbar:
+        hinweis = (
+            "Fehlendes Python-Modul 'numpy'. Bitte installiere es, z. B. mit "
+            "'python3 -m pip install numpy'."
+        )
+    else:
+        hinweis = (
+            "Fehlendes Python-Modul 'numpy' und 'pip' ist nicht verfügbar. "
+            "Installiere zuerst pip (z. B. 'python3 -m ensurepip --upgrade' "
+            "oder 'sudo apt-get install python3-pip') und danach "
+            "'python3 -m pip install numpy'."
+        )
+    print(hinweis, file=sys.stderr)
     raise SystemExit(1)
 from PyQt5 import QtWidgets, QtCore
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
