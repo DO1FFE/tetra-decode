@@ -47,6 +47,16 @@ Falls du einzelne Komponenten später nachrüsten musst, führt `install.sh` ein
 ./install.sh
 ```
 
+### Hinweis zu Python-Abhängigkeiten (PEP 668)
+
+Einige Distributionen blockieren systemweite `pip install`-Aufrufe (Fehler: `externally-managed-environment`). Verwende deshalb entweder die Installationsskripte (`setup.sh`/`install.sh`) oder eine virtuelle Umgebung:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
 ### Hinweis zu PyAudio (Linux)
 
 Wenn die Installation von `pyaudio` mit der Fehlermeldung `portaudio.h: No such file or directory` abbricht, fehlen die PortAudio-Entwicklungsheaders. Installiere sie je nach Distribution (z. B. `portaudio19-dev` unter APT bzw. `portaudio-devel` unter DNF/Zypper oder `portaudio` unter Pacman) und starte danach `install.sh` erneut.
