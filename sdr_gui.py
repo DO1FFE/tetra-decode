@@ -13,6 +13,7 @@ import json
 import wave
 import time
 import tempfile
+import pkgutil
 try:
     import qdarkstyle
 except Exception:
@@ -26,7 +27,7 @@ except Exception:
 try:
     import numpy as np
 except Exception:
-    pip_verfuegbar = importlib.util.find_spec("pip") is not None
+    pip_verfuegbar = pkgutil.find_loader("pip") is not None
     if pip_verfuegbar:
         hinweis = (
             "Fehlendes Python-Modul 'numpy'. Bitte installiere es, z. B. mit "
