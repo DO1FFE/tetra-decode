@@ -248,6 +248,16 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
         "--talkgroups-file",
         help="Datei mit Sprechgruppen-IDs (eine pro Zeile oder kommagetrennt).",
     )
+    parser.add_argument(
+        "--export-csv",
+        metavar="PFAD",
+        help="CSV-Export der erkannten Zellen in die angegebene Datei.",
+    )
+    parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Gibt beim Beenden eine kurze Statistik aus.",
+    )
     auto_group = parser.add_mutually_exclusive_group()
     auto_group.add_argument(
         "--auto-dekodierung",
@@ -407,6 +417,8 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             record_audio: bool,
             filter_regex: str,
             selected_talkgroups: set[str],
+            export_csv_path: str | None,
+            stats_enabled: bool,
         ):
             super().__init__()
             self._device_name = device_name
@@ -423,6 +435,11 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             self._record_audio = record_audio
             self._filter_regex = filter_regex
             self.selected_talkgroups = selected_talkgroups
+            self._export_csv_path = export_csv_path
+            self._stats_enabled = stats_enabled
+            self.cells = {}
+            self.packet_counts = {}
+            self.talkgroups = {}
             self._dec_audio_player = None
             if self._play_audio:
                 self._dec_audio_player = DecodedAudioPlayer(parent=self)
@@ -443,6 +460,12 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             self._decoder.stop()
             if self._dec_audio_player:
                 self._dec_audio_player.stop()
+
+        def finalize(self):
+            if self._export_csv_path:
+                self.export_cells_csv(self._export_csv_path)
+            if self._stats_enabled:
+                self.print_stats()
 
         @QtCore.pyqtSlot(np.ndarray, np.ndarray)
         def _handle_spectrum(self, freqs, powers):
@@ -485,6 +508,9 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
                 except re.error:
                     pass
             print(line, flush=True)
+            self.parse_cell_info(line)
+            self.parse_packet_type(line)
+            self.parse_talkgroups(line)
             for tg_id in extract_talkgroup_ids(line):
                 print(f"Talkgroup {tg_id} empfangen", flush=True)
 
@@ -501,6 +527,85 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
             print("Dekoder gestoppt.", flush=True)
             if self._dec_audio_player:
                 self._dec_audio_player.stop()
+
+        def export_cells_csv(self, path: str):
+            try:
+                with open(path, "w") as fh:
+                    fh.write("Zelle,LAC,MCC,MNC,Frequenz\n")
+                    for cell in self.cells.values():
+                        fh.write(
+                            f"{cell.get('cell','')},{cell.get('lac','')},"
+                            f"{cell.get('mcc','')},{cell.get('mnc','')},{cell.get('freq','')}\n"
+                        )
+            except OSError as exc:
+                print(f"Konnte CSV nicht schreiben: {exc}", file=sys.stderr, flush=True)
+            else:
+                print(f"CSV-Export abgeschlossen: {path}", flush=True)
+
+        def print_stats(self):
+            print("\nStatistik (CLI):", flush=True)
+            print(f"- Zellen erkannt: {len(self.cells)}", flush=True)
+            if self.packet_counts:
+                paket_teile = ", ".join(
+                    f"{typ}: {anzahl}"
+                    for typ, anzahl in sorted(self.packet_counts.items())
+                )
+                print(f"- Pakettypen: {paket_teile}", flush=True)
+            else:
+                print("- Pakettypen: keine", flush=True)
+            if self.talkgroups:
+                print(f"- Sprechgruppen: {len(self.talkgroups)}", flush=True)
+                haeufig = sorted(
+                    self.talkgroups.items(),
+                    key=lambda item: item[1].get("count", 0),
+                    reverse=True,
+                )[:5]
+                if haeufig:
+                    info = ", ".join(
+                        f"{tg_id} ({werte.get('count', 0)})"
+                        for tg_id, werte in haeufig
+                    )
+                    print(f"  Top 5: {info}", flush=True)
+            else:
+                print("- Sprechgruppen: keine", flush=True)
+
+        def parse_cell_info(self, line: str):
+            m = re.search(
+                r"Cell\s*ID[:=]\s*(\w+).*LAC[:=]\s*(\w+).*MCC[:=]\s*(\d+).*MNC[:=]\s*(\d+)",
+                line,
+                re.I,
+            )
+            if not m:
+                return
+            freq_text = ""
+            if self._current_frequency is not None:
+                freq_text = f"{self._current_frequency/1e6:.3f}"
+            cell = {
+                "cell": m.group(1),
+                "lac": m.group(2),
+                "mcc": m.group(3),
+                "mnc": m.group(4),
+                "freq": freq_text,
+            }
+            self.cells[cell["cell"]] = cell
+
+        def parse_packet_type(self, line: str):
+            types = ["SDS", "MM", "CM"]
+            for t in types:
+                if t in line:
+                    self.packet_counts[t] = self.packet_counts.get(t, 0) + 1
+                    break
+
+        def parse_talkgroups(self, line: str):
+            ids = extract_talkgroup_ids(line)
+            if not ids:
+                return
+            now = datetime.now()
+            for tg_id in ids:
+                info = self.talkgroups.get(tg_id, {"count": 0, "last_seen": now})
+                info["count"] = info.get("count", 0) + 1
+                info["last_seen"] = now
+                self.talkgroups[tg_id] = info
 
     if device_id is None:
         device_text = "ohne Index"
@@ -527,6 +632,8 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
         audio_record,
         filter_regex,
         selected_talkgroups,
+        args.export_csv,
+        args.stats,
     )
     runner.start()
     try:
@@ -536,6 +643,7 @@ def _starte_cli_modus(fehlermeldung: str) -> None:
     except KeyboardInterrupt:
         print("\nCLI-Modus beendet.")
         runner.stop()
+        runner.finalize()
 
 
 class SetupWorker(QtCore.QThread):
