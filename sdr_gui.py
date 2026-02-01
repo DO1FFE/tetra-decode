@@ -128,6 +128,15 @@ def _qt_xcb_verfuegbar() -> bool:
     if qt_platform and qt_platform != "xcb":
         return True
 
+    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        return False
+
+    fehlende_libs = [
+        lib for lib in ("xcb", "xkbcommon-x11") if ctypes.util.find_library(lib) is None
+    ]
+    if fehlende_libs:
+        return False
+
     plugin_pfade = []
     env_pfade = [pfad for pfad in os.environ.get("QT_PLUGIN_PATH", "").split(os.pathsep) if pfad]
     plugin_pfade.extend(env_pfade)
