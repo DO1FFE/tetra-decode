@@ -159,7 +159,7 @@ ensure_build_dependencies() {
 }
 
 build_osmo_tetra() {
-    local osmo_cmds=(receiver1 tetra-rx demod_float)
+    local osmo_cmds=(tetra-rx float_to_bits)
     if have_commands "${osmo_cmds[@]}"; then
         log "osmocom-tetra bereits vorhanden."
         return
@@ -173,7 +173,7 @@ build_osmo_tetra() {
     fi
 
     mkdir -p "${BUILD_DIR}"
-    local osmo_tetra_git_url="${OSMO_TETRA_GIT_URL:-https://gitea.osmocom.org/sdr/osmo-tetra.git}"
+    local osmo_tetra_git_url="${OSMO_TETRA_GIT_URL:-https://gitea.osmocom.org/tetra/osmo-tetra.git}"
     local osmo_tetra_mirror_url="https://github.com/osmocom/osmo-tetra.git"
 
     if [[ ! -d "${BUILD_DIR}/osmo-tetra" ]]; then
@@ -195,60 +195,71 @@ build_osmo_tetra() {
         (cd "${BUILD_DIR}/osmo-tetra" && GIT_TERMINAL_PROMPT=0 git pull --ff-only)
     fi
 
-    if [[ ! -f "${BUILD_DIR}/osmo-tetra/configure.ac" && ! -f "${BUILD_DIR}/osmo-tetra/configure.in" ]]; then
-        log "Das osmo-tetra Repository wirkt unvollständig (keine configure.ac/configure.in). Versuche eine Neu-Klonung vom Mirror."
-        rm -rf "${BUILD_DIR}/osmo-tetra"
-        if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 "${osmo_tetra_mirror_url}" "${BUILD_DIR}/osmo-tetra"; then
-            log "Neu-Klonung vom Mirror ist fehlgeschlagen. Bitte entferne ${BUILD_DIR}/osmo-tetra manuell und versuche es erneut."
-            return 1
-        fi
-    fi
-
     pushd "${BUILD_DIR}/osmo-tetra" >/dev/null
-    if [[ ! -f configure ]]; then
-        if [[ ! -f configure.ac && ! -f configure.in ]]; then
-            log "configure.ac/configure.in fehlt weiterhin. Das Repository ist vermutlich beschädigt oder nutzt ein anderes Build-System."
-            log "Bitte prüfe die Repo-Quelle oder klone manuell erneut."
-            return 1
-        fi
-        if [[ -f autogen.sh ]]; then
-            log "Führe autogen.sh aus..."
-            if ! ./autogen.sh; then
-                log "autogen.sh ist fehlgeschlagen. Prüfe die Ausgabe und installiere fehlende Autotools-Pakete, dann erneut ausführen."
-                return 1
-            fi
-        elif [[ -f bootstrap ]]; then
-            log "autogen.sh fehlt. Führe bootstrap aus..."
-            if ! ./bootstrap; then
-                log "bootstrap ist fehlgeschlagen. Prüfe die Ausgabe und installiere fehlende Build-Abhängigkeiten, dann erneut ausführen."
-                return 1
-            fi
-        elif [[ -f bootstrap.sh ]]; then
-            log "autogen.sh fehlt. Führe bootstrap.sh aus..."
-            if ! ./bootstrap.sh; then
-                log "bootstrap.sh ist fehlgeschlagen. Prüfe die Ausgabe und installiere fehlende Build-Abhängigkeiten, dann erneut ausführen."
-                return 1
-            fi
-        else
-            log "Kein autogen.sh/bootstrap gefunden. Führe autoreconf -fi aus (benötigt autoconf/automake/libtool)."
-            if ! autoreconf -fi; then
-                log "autoreconf -fi ist fehlgeschlagen. Bitte installiere autoconf/automake/libtool und wiederhole den Schritt."
-                return 1
-            fi
-        fi
+    if [[ -f configure || -f configure.ac || -f configure.in || -f autogen.sh || -f bootstrap || -f bootstrap.sh ]]; then
         if [[ ! -f configure ]]; then
-            log "Konfigurationsskript wurde nicht erzeugt. Prüfe die Autotools-Ausgabe und führe den Vorbereitungsschritt erneut aus."
-            return 1
+            if [[ ! -f configure.ac && ! -f configure.in ]]; then
+                log "configure.ac/configure.in fehlt weiterhin. Das Repository ist vermutlich beschädigt oder nutzt ein anderes Build-System."
+                log "Bitte prüfe die Repo-Quelle oder klone manuell erneut."
+                return 1
+            fi
+            if [[ -f autogen.sh ]]; then
+                log "Führe autogen.sh aus..."
+                if ! ./autogen.sh; then
+                    log "autogen.sh ist fehlgeschlagen. Prüfe die Ausgabe und installiere fehlende Autotools-Pakete, dann erneut ausführen."
+                    return 1
+                fi
+            elif [[ -f bootstrap ]]; then
+                log "autogen.sh fehlt. Führe bootstrap aus..."
+                if ! ./bootstrap; then
+                    log "bootstrap ist fehlgeschlagen. Prüfe die Ausgabe und installiere fehlende Build-Abhängigkeiten, dann erneut ausführen."
+                    return 1
+                fi
+            elif [[ -f bootstrap.sh ]]; then
+                log "autogen.sh fehlt. Führe bootstrap.sh aus..."
+                if ! ./bootstrap.sh; then
+                    log "bootstrap.sh ist fehlgeschlagen. Prüfe die Ausgabe und installiere fehlende Build-Abhängigkeiten, dann erneut ausführen."
+                    return 1
+                fi
+            else
+                log "Kein autogen.sh/bootstrap gefunden. Führe autoreconf -fi aus (benötigt autoconf/automake/libtool)."
+                if ! autoreconf -fi; then
+                    log "autoreconf -fi ist fehlgeschlagen. Bitte installiere autoconf/automake/libtool und wiederhole den Schritt."
+                    return 1
+                fi
+            fi
+            if [[ ! -f configure ]]; then
+                log "Konfigurationsskript wurde nicht erzeugt. Prüfe die Autotools-Ausgabe und führe den Vorbereitungsschritt erneut aus."
+                return 1
+            fi
         fi
-    fi
 
-    log "Konfiguriere osmocom-tetra..."
-    ./configure --prefix="${INSTALL_PREFIX}"
-    log "Baue osmocom-tetra..."
-    make -j"$(nproc)"
-    log "Installiere osmocom-tetra..."
-    run_sudo make install
-    run_sudo ldconfig || true
+        log "Konfiguriere osmocom-tetra..."
+        ./configure --prefix="${INSTALL_PREFIX}"
+        log "Baue osmocom-tetra..."
+        make -j"$(nproc)"
+        log "Installiere osmocom-tetra..."
+        run_sudo make install
+        run_sudo ldconfig || true
+    elif [[ -f src/Makefile ]]; then
+        log "Kein Autotools-Setup gefunden. Verwende Makefile in src/."
+        log "Baue osmocom-tetra..."
+        make -C src -j"$(nproc)"
+        log "Installiere osmocom-tetra..."
+        run_sudo install -d "${INSTALL_PREFIX}/bin"
+        local binaries=(tetra-rx float_to_bits conv_enc_test crc_test tunctl)
+        local bin
+        for bin in "${binaries[@]}"; do
+            if [[ -f "src/${bin}" ]]; then
+                run_sudo install -m 0755 "src/${bin}" "${INSTALL_PREFIX}/bin/${bin}"
+            fi
+        done
+        run_sudo ldconfig || true
+    else
+        log "Kein unterstütztes Build-System gefunden (weder Autotools noch src/Makefile)."
+        log "Bitte prüfe die Repo-Quelle oder baue das Projekt manuell."
+        return 1
+    fi
     popd >/dev/null
 
     if have_commands "${osmo_cmds[@]}"; then
