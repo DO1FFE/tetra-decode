@@ -862,12 +862,13 @@ class SetupWorker(QtCore.QThread):
 
     REQUIRED_CMDS = {
         "receiver1": "osmocom-tetra",
-        "demod_float": "osmocom-tetra",
         "tetra-rx": "osmocom-tetra",
         "rtl_power": "rtl-sdr",
         "rtl_fm": "rtl-sdr",
         "rtl_test": "rtl-sdr",
     }
+    DEMOD_ALTERNATIVES = ("demod_float", "float_to_bits")
+    DEMOD_PKG = "osmocom-tetra"
 
     PY_MODULES = ["pyaudio", "numpy", "matplotlib", "PyQt5", "requests", "qdarkstyle"]
 
@@ -879,6 +880,8 @@ class SetupWorker(QtCore.QThread):
     def detect_missing_requirements(cls):
         """Gibt ein Tupel mit fehlenden Befehlen, Modulen und optionalen Werkzeugen zurück."""
         missing_cmds = [cmd for cmd in cls.REQUIRED_CMDS if not shutil.which(cmd)]
+        if not any(shutil.which(cmd) for cmd in cls.DEMOD_ALTERNATIVES):
+            missing_cmds.append("demod_float/float_to_bits")
         missing_mods = [mod for mod in cls.PY_MODULES if not cls._has_module(mod)]
         missing_optional = []
 
@@ -916,6 +919,48 @@ class SetupWorker(QtCore.QThread):
                     self.log.emit(f"{cmd} fehlt - bitte {pkg} manuell installieren")
             else:
                 self.log.emit(f"{cmd} fehlt - bitte {pkg} manuell installieren")
+
+        if not any(shutil.which(cmd) for cmd in self.DEMOD_ALTERNATIVES):
+            if self._run_install_script() and any(
+                shutil.which(cmd) for cmd in self.DEMOD_ALTERNATIVES
+            ):
+                pass
+            elif sys.platform.startswith("linux"):
+                self.log.emit(
+                    f"Installiere {self.DEMOD_ALTERNATIVES[0]} oder "
+                    f"{self.DEMOD_ALTERNATIVES[1]} über apt ({self.DEMOD_PKG})"
+                )
+                self._run_cmd(["sudo", "apt-get", "install", "-y", self.DEMOD_PKG])
+            elif sys.platform.startswith("win"):
+                if self.DEMOD_PKG in ("rtl-sdr", "osmocom-tetra"):
+                    if self._run_install_script() and any(
+                        shutil.which(cmd) for cmd in self.DEMOD_ALTERNATIVES
+                    ):
+                        pass
+                    else:
+                        self.log.emit(
+                            f"{self.DEMOD_ALTERNATIVES[0]} oder "
+                            f"{self.DEMOD_ALTERNATIVES[1]} fehlt - bitte "
+                            f"{self.DEMOD_PKG} manuell installieren"
+                        )
+                elif shutil.which("choco"):
+                    self.log.emit(
+                        f"Installiere {self.DEMOD_ALTERNATIVES[0]} oder "
+                        f"{self.DEMOD_ALTERNATIVES[1]} über choco ({self.DEMOD_PKG})"
+                    )
+                    self._run_cmd(["choco", "install", "-y", self.DEMOD_PKG])
+                else:
+                    self.log.emit(
+                        f"{self.DEMOD_ALTERNATIVES[0]} oder "
+                        f"{self.DEMOD_ALTERNATIVES[1]} fehlt - bitte "
+                        f"{self.DEMOD_PKG} manuell installieren"
+                    )
+            else:
+                self.log.emit(
+                    f"{self.DEMOD_ALTERNATIVES[0]} oder "
+                    f"{self.DEMOD_ALTERNATIVES[1]} fehlt - bitte "
+                    f"{self.DEMOD_PKG} manuell installieren"
+                )
 
         for mod in self.PY_MODULES:
             if self._has_module(mod):
@@ -1330,9 +1375,16 @@ class TetraDecoder(QtCore.QObject):
                     f"Audioausgabe aktiviert ({self._audio_mode}), Pfad: {self._audio_path}"
                 )
 
+            if shutil.which("demod_float"):
+                demod_cmd = ["demod_float"]
+            elif shutil.which("float_to_bits"):
+                demod_cmd = ["float_to_bits"]
+            else:
+                demod_cmd = ["demod_float"]
+
             cmds = [
                 receiver_cmd,
-                ["demod_float"],
+                demod_cmd,
                 ["tetra-rx"] + (["-a", self._audio_path] if audio_enabled else []),
             ]
 
