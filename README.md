@@ -1,6 +1,6 @@
 # TETRA Decode
 
-Dieses Repository enthält eine einfache PyQt5-Anwendung, die demonstriert, wie man mit einem SDR (z.B. RTL-SDR, HackRF, LimeSDR) im Bereich von 380 bis 430 MHz nach Signalen sucht. Die stärkste Frequenz wird automatisch ausgewählt und über externe Werkzeuge wie `rtl_power` und `rtl_fm` zu Audio demoduliert. Außerdem sind die osmocom-tetra-Programme (`receiver1`, `demod_float`, `tetra-rx`) eingebunden, um unverschlüsselte TETRA-Kontrollkanäle zu dekodieren.
+Dieses Repository enthält eine einfache PyQt5-Anwendung, die demonstriert, wie man mit einem SDR (z.B. RTL-SDR, HackRF, LimeSDR) im Bereich von 380 bis 430 MHz nach Signalen sucht. Die stärkste Frequenz wird automatisch ausgewählt und über externe Werkzeuge wie `rtl_power` und `rtl_fm` zu Audio demoduliert. Außerdem sind die osmocom-tetra-Programme (`receiver1`, `demod_float` oder `float_to_bits`, `tetra-rx`) eingebunden, um unverschlüsselte TETRA-Kontrollkanäle zu dekodieren.
 
 Die grafische Oberfläche zeigt ein Echtzeit-Spektrum, bietet Start- und Stopp-Steuerung und gibt den empfangenen Ton über PyAudio wieder.
 
@@ -20,7 +20,7 @@ Externe SDR-Werkzeuge sowie die osmocom-tetra-Binärdateien müssen installiert 
 - **Frequenzscan** – `rtl_power` durchsucht einen wählbaren Bereich und wählt automatisch das stärkste Signal aus.
 - **Live-Spektrum** – das Spektrum wird während des Scans kontinuierlich dargestellt.
 - **Audio-Demodulation** – `rtl_fm` demoduliert die gewählte Frequenz und PyAudio spielt den Ton ab. Eine anpassbare AGC hält die Lautstärke stabil.
-- **TETRA-Dekodierung** – `receiver1`, `demod_float` und `tetra-rx` dekodieren unverschlüsselte Kontrollkanäle. Die Ausgabe erscheint in einem eigenen Tab und kann per Regex gefiltert werden.
+- **TETRA-Dekodierung** – `receiver1`, `demod_float` oder `float_to_bits` sowie `tetra-rx` dekodieren unverschlüsselte Kontrollkanäle. Die Ausgabe erscheint in einem eigenen Tab und kann per Regex gefiltert werden.
 - **Sprechgruppen** – erkannte Sprechgruppen-IDs werden gezählt, mit Zeitstempel gespeichert und lassen sich gezielt auswählen, sodass nur relevante Gruppen in der Ausgabe erscheinen.
 - **Automatische Dekodierung nach Scan** – auf Wunsch startet die TETRA-Dekodierung direkt nach einem Scanvorgang.
 - **Aktivitätserkennung** – Pegelüberwachung signalisiert Aktivität und kann optional Telegram-Benachrichtigungen senden. Erkanntes wird als WAV aufgezeichnet.
@@ -99,7 +99,7 @@ PowerShell -ExecutionPolicy Bypass -File .\setup.ps1
 
 # TETRA Decode (Deutsch)
 
-Dieses Repository enthält eine einfache PyQt5-Anwendung, die demonstriert, wie man mit einem SDR (z.B. RTL-SDR, HackRF, LimeSDR) zwischen 380 und 430 MHz scannt. Die stärkste Frequenz wird automatisch ausgewählt und über externe Kommandozeilenwerkzeuge wie `rtl_power` und `rtl_fm` zu Audio demoduliert. Außerdem integriert sie die osmocom-tetra-Werkzeuge (`receiver1`, `demod_float`, `tetra-rx`), um unverschlüsselte TETRA-Kontrollinformationen zu dekodieren.
+Dieses Repository enthält eine einfache PyQt5-Anwendung, die demonstriert, wie man mit einem SDR (z.B. RTL-SDR, HackRF, LimeSDR) zwischen 380 und 430 MHz scannt. Die stärkste Frequenz wird automatisch ausgewählt und über externe Kommandozeilenwerkzeuge wie `rtl_power` und `rtl_fm` zu Audio demoduliert. Außerdem integriert sie die osmocom-tetra-Werkzeuge (`receiver1`, `demod_float` oder `float_to_bits`, `tetra-rx`), um unverschlüsselte TETRA-Kontrollinformationen zu dekodieren.
 
 Die grafische Oberfläche zeigt ein Echtzeit-Spektrum, bietet Start-/Stopp-Steuerung und spielt empfangenes Audio über PyAudio ab.
 
@@ -141,7 +141,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 - **Frequenzscan** – nutzt `rtl_power`, um einen wählbaren Bereich abzusuchen. Das stärkste Signal wird automatisch für die weitere Verarbeitung ausgewählt.
 - **Echtzeit-Spektrum** – das Spektrum wird während des Scans kontinuierlich dargestellt.
 - **Audio-Demodulation** – `rtl_fm` demoduliert die gewählte Frequenz, PyAudio spielt das Audio ab. Eine anpassbare AGC hält die Lautstärke stabil.
-- **TETRA-Dekodierung** – integriert `receiver1`, `demod_float` und `tetra-rx`, um unverschlüsselte Kontrollkanäle zu dekodieren. Die Ausgabe erscheint in einem eigenen Tab und kann per Regex gefiltert werden.
+- **TETRA-Dekodierung** – integriert `receiver1`, `demod_float` oder `float_to_bits` sowie `tetra-rx`, um unverschlüsselte Kontrollkanäle zu dekodieren. Die Ausgabe erscheint in einem eigenen Tab und kann per Regex gefiltert werden.
 - **Aktivitätserkennung** – Audio-Pegelüberwachung zeigt Aktivität an und kann optional Telegram-Benachrichtigungen senden. Erkannte Aktivität wird als WAV aufgezeichnet.
 - **Zellinformationen** – dekodierte Cell-IDs, LAC, MCC/MNC und die genutzte Frequenz werden in einer Tabelle gespeichert und können als CSV exportiert werden.
 - **Paketstatistiken** – zeigt ein Balkendiagramm der empfangenen TETRA-Pakettypen.

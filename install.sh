@@ -82,6 +82,16 @@ have_commands() {
     return 0
 }
 
+have_any_command() {
+    local cmd
+    for cmd in "$@"; do
+        if command -v "$cmd" >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 ensure_rtl_sdr() {
     local rtl_cmds=(rtl_power rtl_fm rtl_test)
     if have_commands "${rtl_cmds[@]}"; then
@@ -159,8 +169,7 @@ ensure_build_dependencies() {
 }
 
 build_osmo_tetra() {
-    local osmo_cmds=(tetra-rx float_to_bits)
-    if have_commands "${osmo_cmds[@]}"; then
+    if have_commands tetra-rx && have_any_command demod_float float_to_bits; then
         log "osmocom-tetra bereits vorhanden."
         return
     fi
@@ -262,10 +271,10 @@ build_osmo_tetra() {
     fi
     popd >/dev/null
 
-    if have_commands "${osmo_cmds[@]}"; then
+    if have_commands tetra-rx && have_any_command demod_float float_to_bits; then
         log "osmocom-tetra Installation abgeschlossen."
     else
-        log "osmocom-tetra konnte nicht installiert werden."
+        log "osmocom-tetra konnte nicht installiert werden (tetra-rx und demod_float/float_to_bits prüfen)."
     fi
 }
 
