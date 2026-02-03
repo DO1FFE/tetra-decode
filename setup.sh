@@ -154,7 +154,16 @@ build_osmo_tetra() {
     pushd "${BUILD_DIR}/osmo-tetra" >/dev/null
     log "Führe Autotools-Konfiguration für osmo-tetra aus..."
     if [[ ! -f configure ]]; then
-        ./autogen.sh
+        if [[ -f ./autogen.sh ]]; then
+            chmod +x ./autogen.sh || die "Konnte autogen.sh nicht ausführbar machen."
+            ./autogen.sh || die "Autotools-Konfiguration über autogen.sh ist fehlgeschlagen."
+        else
+            require_command autoreconf
+            require_command autoconf
+            require_command automake
+            require_command libtool
+            autoreconf -fi || die "Autotools-Konfiguration über autoreconf ist fehlgeschlagen."
+        fi
     fi
 
     log "Starte Build von osmo-tetra..."
