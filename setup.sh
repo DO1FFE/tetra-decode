@@ -53,8 +53,42 @@ install_packages() {
             if ! dpkg -s libosmocore-dev >/dev/null 2>&1; then
                 log "libosmocore-dev ist nicht installiert. Es findet kein automatischer Quell-Build statt; bitte manuell installieren oder aus den Quellen bauen."
             fi
+            local osmo_dsp_via_source=false
+            local osmo_dsp_pc_name=""
+            if command -v pkg-config >/dev/null 2>&1; then
+                for pc_name in libosmodsp libosmo-dsp; do
+                    if pkg-config --exists "${pc_name}" >/dev/null 2>&1; then
+                        osmo_dsp_via_source=true
+                        osmo_dsp_pc_name="${pc_name}"
+                        local osmo_dsp_prefix=""
+                        osmo_dsp_prefix="$(pkg-config --variable=prefix "${pc_name}" 2>/dev/null || true)"
+                        if [[ "${osmo_dsp_prefix}" == "/usr/local" ]]; then
+                            log "libosmo-dsp wurde über /usr/local erkannt (pkg-config: ${pc_name})."
+                        else
+                            log "libosmo-dsp wurde über pkg-config erkannt (${pc_name}, Prefix: ${osmo_dsp_prefix:-unbekannt})."
+                        fi
+                        break
+                    fi
+                done
+            fi
+            if [[ "${osmo_dsp_via_source}" == false ]]; then
+                if compgen -G "/usr/local/include/osmo-dsp/*.h" >/dev/null || compgen -G "/usr/local/lib/libosmo-dsp*" >/dev/null; then
+                    osmo_dsp_via_source=true
+                    log "libosmo-dsp wurde über /usr/local erkannt (Header/Library-Pfade)."
+                fi
+            fi
+            if [[ "${osmo_dsp_via_source}" == false && -d /usr/local/lib/pkgconfig ]]; then
+                if [[ ":${PKG_CONFIG_PATH:-}:" != *":/usr/local/lib/pkgconfig:"* ]]; then
+                    export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:+${PKG_CONFIG_PATH}:}/usr/local/lib/pkgconfig"
+                    log "PKG_CONFIG_PATH wurde um /usr/local/lib/pkgconfig ergänzt, damit osmo-tetra Build-Abhängigkeiten gefunden werden."
+                fi
+            fi
             if ! dpkg -s libosmo-dsp-dev >/dev/null 2>&1; then
-                log "libosmo-dsp-dev ist nicht installiert. Es findet kein automatischer Quell-Build statt; bitte manuell installieren oder aus den Quellen bauen."
+                if [[ "${osmo_dsp_via_source}" == true ]]; then
+                    log "libosmo-dsp wurde über /usr/local erkannt; dpkg-Prüfung für libosmo-dsp-dev wird übersprungen."
+                else
+                    log "libosmo-dsp-dev ist nicht installiert. Es findet kein automatischer Quell-Build statt; bitte manuell installieren oder aus den Quellen bauen."
+                fi
             fi
             ;;
         dnf)
