@@ -282,11 +282,26 @@ install_python_requirements() {
     if command -v python3 >/dev/null 2>&1; then
         log "Installiere Python-Abhängigkeiten..."
         if ensure_package_manager; then
+            log "Installiere Build-Abhängigkeiten für Python-Pakete..."
+            case "${PKG_MANAGER}" in
+                apt)
+                    install_system_packages build-essential python3-dev portaudio19-dev
+                    ;;
+                dnf)
+                    install_system_packages gcc gcc-c++ make python3-devel portaudio-devel || true
+                    ;;
+                pacman)
+                    install_system_packages base-devel python portaudio || true
+                    ;;
+                zypper)
+                    install_system_packages gcc gcc-c++ make python3-devel portaudio-devel || true
+                    ;;
+            esac
             log "Installiere Laufzeitbibliotheken für PyQt5 (glib/gthread)..."
             case "${PKG_MANAGER}" in
                 apt)
                     install_system_packages libglib2.0-0
-                    ;;
+                ;;
                 dnf)
                     install_system_packages glib2 || true
                     ;;
