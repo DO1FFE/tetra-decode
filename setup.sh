@@ -47,7 +47,7 @@ install_packages() {
                 autoconf automake libtool \
                 libfftw3-dev libitpp-dev libusb-1.0-0-dev libpcsclite-dev \
                 libgnutls28-dev libboost-all-dev libgmp-dev liborc-0.4-dev \
-                libglib2.0-0 rtl-sdr sox
+                libglib2.0-0 portaudio19-dev rtl-sdr sox
             # osmocom-Abhängigkeiten
             run_sudo apt-get install -y libosmocore-dev libosmo-dsp-dev || true
             if ! dpkg -s libosmocore-dev >/dev/null 2>&1; then
@@ -98,21 +98,21 @@ install_packages() {
                 git wget curl cmake ninja-build autoconf automake libtool \
                 fftw-devel itpp-devel \
                 libusbx-devel pcsclite-devel gnutls-devel boost-devel gmp-devel orc-devel \
-                glib2 \
+                glib2 portaudio-devel \
                 rtl-sdr sox || true
             ;;
         pacman)
             log "Verwende pacman, um Systemabhängigkeiten zu installieren."
             run_sudo pacman -Sy --noconfirm --needed \
                 base-devel git wget curl cmake ninja autoconf automake libtool \
-                fftw libusb pcsclite gnutls boost-libs gmp orc glib2 sox rtl-sdr || true
+                fftw libusb pcsclite gnutls boost-libs gmp orc glib2 portaudio sox rtl-sdr || true
             ;;
         zypper)
             log "Verwende zypper, um Systemabhängigkeiten zu installieren."
             run_sudo zypper refresh
             run_sudo zypper install -y \
                 -t pattern devel_C_C++ git wget curl cmake ninja autoconf automake libtool fftw3-devel itpp-devel libusb-1_0-devel pcsclite-devel \
-                libgnutls-devel libboost_headers-devel libgmp-devel orc-devel glib2 rtl-sdr sox || true
+                libgnutls-devel libboost_headers-devel libgmp-devel orc-devel glib2 portaudio-devel rtl-sdr sox || true
             ;;
         *)
             log "Kein unterstützter Paketmanager gefunden. Überspringe Systempakete."
@@ -177,8 +177,106 @@ build_osmo_tetra() {
 install_python_packages() {
     log "Installiere Python-Abhängigkeiten..."
     require_command python3
-    python3 -m pip install --upgrade pip
-    python3 -m pip install -r "${PROJECT_ROOT}/requirements.txt"
+    local manager=""
+    if command -v apt-get >/dev/null 2>&1; then
+        manager="apt"
+    elif command -v dnf >/dev/null 2>&1; then
+        manager="dnf"
+    elif command -v pacman >/dev/null 2>&1; then
+        manager="pacman"
+    elif command -v zypper >/dev/null 2>&1; then
+        manager="zypper"
+    fi
+
+    local ensure_python_pip
+    ensure_python_pip() {
+        if python3 -m pip --version >/dev/null 2>&1; then
+            return 0
+        fi
+        log "pip fehlt für python3. Versuche, pip nachzuinstallieren..."
+        if python3 -m ensurepip --upgrade >/dev/null 2>&1; then
+            return 0
+        fi
+        case "${manager}" in
+            apt)
+                run_sudo apt-get update
+                run_sudo apt-get install -y python3-pip python3-venv
+                ;;
+            dnf)
+                run_sudo dnf install -y python3-pip python3-virtualenv || true
+                ;;
+            pacman)
+                run_sudo pacman -Sy --noconfirm --needed python-pip || true
+                ;;
+            zypper)
+                run_sudo zypper refresh
+                run_sudo zypper install -y python3-pip || true
+                ;;
+            *)
+                log "Kein unterstützter Paketmanager gefunden, um pip zu installieren."
+                ;;
+        esac
+        python3 -m pip --version >/dev/null 2>&1
+    }
+
+    local create_venv
+    create_venv() {
+        if python3 -m venv --upgrade-deps "$1" >/dev/null 2>&1; then
+            return 0
+        fi
+        log "Erstellen der virtuellen Umgebung fehlgeschlagen. Installiere venv-Unterstützung und versuche erneut..."
+        case "${manager}" in
+            apt)
+                run_sudo apt-get update
+                run_sudo apt-get install -y python3-venv
+                ;;
+            dnf)
+                run_sudo dnf install -y python3-virtualenv || true
+                ;;
+            pacman)
+                run_sudo pacman -Sy --noconfirm --needed python-virtualenv || true
+                ;;
+            zypper)
+                run_sudo zypper refresh
+                run_sudo zypper install -y python3-virtualenv || true
+                ;;
+            *)
+                ;;
+        esac
+        python3 -m venv --upgrade-deps "$1"
+    }
+
+    if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+        log "Virtuelle Umgebung aktiv: ${VIRTUAL_ENV}. Installiere dort."
+        ensure_python_pip || true
+        python3 -m pip install --upgrade pip
+        python3 -m pip install -r "${PROJECT_ROOT}/requirements.txt"
+        return
+    fi
+
+    local venv_path="${PROJECT_ROOT}/.venv"
+    log "Keine virtuelle Umgebung aktiv. Verwende ${venv_path}."
+    if [[ ! -d "${venv_path}" || ! -x "${venv_path}/bin/python3" || ! -f "${venv_path}/bin/activate" ]]; then
+        if [[ -d "${venv_path}" ]]; then
+            log "Vorhandene virtuelle Umgebung ist unvollständig. Erstelle sie neu."
+            rm -rf "${venv_path}"
+        fi
+        log "Erstelle virtuelle Umgebung in ${venv_path}..."
+        create_venv "${venv_path}"
+    fi
+
+    if [[ -f "${venv_path}/bin/activate" ]]; then
+        # shellcheck source=/dev/null
+        source "${venv_path}/bin/activate"
+        log "Virtuelle Umgebung aktiviert: ${VIRTUAL_ENV}. Installiere dort."
+        ensure_python_pip || true
+        python3 -m pip install --upgrade pip
+        python3 -m pip install -r "${PROJECT_ROOT}/requirements.txt"
+    else
+        log "Aktivierung der virtuellen Umgebung fehlgeschlagen. Installiere Python-Abhängigkeiten mit --user."
+        ensure_python_pip || true
+        python3 -m pip install --user -r "${PROJECT_ROOT}/requirements.txt"
+    fi
 }
 
 main() {
