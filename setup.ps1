@@ -161,6 +161,27 @@ function Install-PythonRequirements {
     python -m pip install -r (Join-Path $ProjectRoot 'requirements.txt')
 }
 
+function Ensure-PythonAndPip {
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+        Write-Host "Python nicht gefunden. Installiere Python ueber Chocolatey..."
+        Ensure-Chocolatey
+        Install-ChocoPackage -Name python
+    }
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+        throw "Python konnte nicht installiert werden."
+    }
+    $pipAvailable = $true
+    try {
+        python -m pip --version | Out-Null
+    } catch {
+        $pipAvailable = $false
+    }
+    if (-not $pipAvailable) {
+        Write-Host "pip nicht gefunden. Installiere pip ueber ensurepip..."
+        python -m ensurepip --upgrade
+    }
+}
+
 Assert-Administrator
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -202,6 +223,7 @@ foreach ($tool in $toolTargets) {
     }
 }
 
+Ensure-PythonAndPip
 Install-PythonRequirements -ProjectRoot $projectRoot
 
 Write-Host "Setup abgeschlossen. Stelle sicher, dass du die PowerShell neu startest, damit PATH-Aenderungen aktiv werden."
