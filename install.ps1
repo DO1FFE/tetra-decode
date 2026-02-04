@@ -244,17 +244,13 @@ $toolTargets = @(
        Binaries = @('rtl_fm.exe','rtl_power.exe','rtl_test.exe') },
     @{ Name = 'osmocom-tetra Werkzeuge';
        Urls = @(
-           'https://github.com/sq5bpf/osmo-tetra-sq5bpf/archive/4e9f1b23b460a6b24270ece685ac68d4d7fd4cc8.zip',
-           'https://codeload.github.com/sq5bpf/osmo-tetra-sq5bpf/zip/4e9f1b23b460a6b24270ece685ac68d4d7fd4cc8'
+           'https://osmocom.org/attachments/download/3446/osmo-tetra-win64-20200512.zip',
+           'https://archive.org/download/osmo-tetra-win64-20200512/osmo-tetra-win64-20200512.zip',
+           'https://downloads.osmocom.org/attachments/download/3446/osmo-tetra-win64-20200512.zip'
        );
-       Checksums = @{
-           'https://github.com/sq5bpf/osmo-tetra-sq5bpf/archive/4e9f1b23b460a6b24270ece685ac68d4d7fd4cc8.zip' = '38920f7f49fa887e3bc98dd3d801e1574ad7143b43666e3671ea20ec9a26518e';
-           'https://codeload.github.com/sq5bpf/osmo-tetra-sq5bpf/zip/4e9f1b23b460a6b24270ece685ac68d4d7fd4cc8' = '38920f7f49fa887e3bc98dd3d801e1574ad7143b43666e3671ea20ec9a26518e'
-       };
        ManualSteps = @(
-           'Lade die Windows-Binaries oder den Quellcode von der OsmocomTETRA-Wiki-Seite: https://osmocom.org/projects/tetra/wiki/OsmocomTETRA',
-           'Entpacke das Archiv nach ' + (Join-Path $installRoot 'osmocom-tetra'),
-           'Falls es sich um Quellcode handelt: Baue die Tools (receiver1.exe, tetra-rx.exe, demod_float.exe) und kopiere sie in das Zielverzeichnis.',
+           'Lade das Windows-Binary-Archiv von der OsmocomTETRA-Wiki-Seite: https://osmocom.org/projects/tetra/wiki/OsmocomTETRA',
+           'Entpacke das Archiv nach ' + (Join-Path $installRoot 'osmocom-tetra') + ' und stelle sicher, dass die Tools (receiver1.exe, tetra-rx.exe, demod_float.exe) enthalten sind.',
            'Stelle sicher, dass das Zielverzeichnis im PATH liegt.'
        );
        Target = Join-Path $installRoot 'osmocom-tetra';
