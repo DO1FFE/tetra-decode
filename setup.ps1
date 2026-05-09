@@ -223,6 +223,15 @@ foreach ($tool in $toolTargets) {
     }
 }
 
+$sourceInstaller = Join-Path $projectRoot 'scripts\ensure_osmocom_tetra.ps1'
+if (Test-Path $sourceInstaller) {
+    try {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $sourceInstaller
+    } catch {
+        Write-Warning "osmocom-tetra Source-Integration konnte nicht abgeschlossen werden: $_"
+    }
+}
+
 Ensure-PythonAndPip
 Install-PythonRequirements -ProjectRoot $projectRoot
 

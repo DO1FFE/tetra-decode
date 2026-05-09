@@ -126,6 +126,15 @@ build_osmo_tetra() {
         return
     fi
 
+    local helper="${PROJECT_ROOT}/scripts/ensure_osmocom_tetra.sh"
+    if [[ -f "${helper}" ]]; then
+        chmod +x "${helper}" || true
+        if "${helper}"; then
+            return
+        fi
+        log "Source-Integration aus third_party/osmo-tetra ist fehlgeschlagen. Versuche Fallback-Build..."
+    fi
+
     require_command git
 
     mkdir -p "${BUILD_DIR}"

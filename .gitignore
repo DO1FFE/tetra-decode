@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+.build/
+build/
+dist/
+
+*.spec
+tools/osmocom-tetra/
