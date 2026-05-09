@@ -14,6 +14,27 @@ python sdr_gui.py --cli
 ```
 
 Externe SDR-Werkzeuge sowie die osmocom-tetra-Binärdateien müssen installiert und im Systempfad verfügbar sein.
+Die offiziellen Osmocom-TETRA-Quellen sind als Submodule unter
+`third_party/osmo-tetra` eingebunden; `scripts/ensure_osmocom_tetra.sh` baut
+daraus lokale Tools.
+
+Dieses Repository bindet die offiziellen Osmocom-TETRA-Quellen zusätzlich als
+Git-Submodule unter `third_party/osmo-tetra` ein. Nach dem Klonen mit
+Submodulen kannst du die lokalen Decoder-Werkzeuge aus der Quelle bauen:
+
+```bash
+git submodule update --init --recursive
+./scripts/ensure_osmocom_tetra.sh
+```
+
+Unter Windows initialisiert `scripts/ensure_osmocom_tetra.ps1` das Submodule
+und versucht den Build in WSL. Native Windows-Binaries von Osmocom-TETRA sind
+nicht zuverlässig verfügbar; die alte ZIP-Quelle kann eine Bot-Schutzseite
+statt eines Archivs liefern.
+
+Eine portable Windows-EXE liegt im Repo als `tetra-decode.exe`. Sie enthält die
+Python-GUI-Abhängigkeiten; externe SDR-/Osmocom-Tools bleiben separate
+System- oder Repo-nahe Tools.
 
 ## Funktionen
 
@@ -152,9 +173,11 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 - **Setup-Assistent** – prüft benötigte Tools und Python-Module und installiert sie bei Bedarf.
 - **PPM-Korrektur** – einstellbarer RTL-SDR-PPM-Wert, der an alle SDR-Befehle übergeben wird.
 
-## Windows-EXE erstellen
+## Windows-EXE
 
-Um das Programm unter Windows als Einzeldatei auszuführen, kannst du [PyInstaller](https://www.pyinstaller.org/) verwenden. Installiere zunächst Python 3 zusammen mit den Abhängigkeiten:
+Eine vorgebaute portable EXE liegt als `tetra-decode.exe` im Repo. Um sie neu
+zu bauen, kannst du [PyInstaller](https://www.pyinstaller.org/) verwenden.
+Installiere zunächst Python 3 zusammen mit den Abhängigkeiten:
 
 ```bash
 pip install -r requirements.txt
@@ -164,7 +187,7 @@ pip install pyinstaller
 Anschließend erzeugt folgender Befehl eine portable EXE-Datei:
 
 ```bash
-pyinstaller --onefile --windowed sdr_gui.py
+pyinstaller --onefile --windowed --name tetra-decode sdr_gui.py
 ```
 
-Die Datei `sdr_gui.exe` findest du danach im Ordner `dist`.
+Die Datei `tetra-decode.exe` findest du danach im Ordner `dist`.

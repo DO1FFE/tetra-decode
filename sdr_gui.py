@@ -62,7 +62,141 @@ from matplotlib.figure import Figure
 import pyaudio
 
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+TOOL_BASENAMES = {
+    "receiver1",
+    "tetra-rx",
+    "rtl_power",
+    "rtl_fm",
+    "rtl_sdr",
+    "rtl_test",
+    "demod_float",
+    "float_to_bits",
+}
+
+
+def _tool_filenames():
+    if sys.platform.startswith("win"):
+        suffixes = (".exe", ".cmd", ".bat")
+        return {name + suffix for name in TOOL_BASENAMES for suffix in suffixes}
+    return set(TOOL_BASENAMES)
+
+
+def _prepend_tool_paths():
+    """Macht lokale und Setup-Toolverzeichnisse fuer subprocess/shutil.which sichtbar."""
+    roots = [
+        os.path.join(PROJECT_ROOT, "tools"),
+        os.path.join(PROJECT_ROOT, "bin"),
+    ]
+    if sys.platform.startswith("win"):
+        program_data = os.environ.get("ProgramData")
+        if program_data:
+            roots.append(os.path.join(program_data, "tetra-decode"))
+
+    def _tool_dir_priority(path: str) -> int:
+        lowered = path.lower()
+        if "x64" in lowered or "64" in lowered:
+            return 0
+        if "x86" in lowered or "32" in lowered:
+            return 2
+        return 1
+
+    tool_files = _tool_filenames()
+    current_paths = [path for path in os.environ.get("PATH", "").split(os.pathsep) if path]
+    discovered = []
+    for root in roots:
+        if not root or not os.path.isdir(root):
+            continue
+        root_discovered = []
+        for directory, _dirnames, filenames in os.walk(root):
+            available = {name.lower() for name in filenames}
+            if not tool_files.intersection(available):
+                continue
+            normalized = os.path.normcase(os.path.abspath(directory))
+            if normalized in discovered or normalized in root_discovered:
+                continue
+            root_discovered.append(normalized)
+        discovered.extend(sorted(root_discovered, key=_tool_dir_priority))
+
+    if discovered:
+        promoted = set(discovered)
+        remaining = [
+            path for path in current_paths
+            if os.path.normcase(os.path.abspath(path)) not in promoted
+        ]
+        os.environ["PATH"] = os.pathsep.join(discovered + remaining)
+
+
+_prepend_tool_paths()
+
+
+def _official_demod_script():
+    script = os.path.join(
+        PROJECT_ROOT,
+        "third_party",
+        "osmo-tetra",
+        "src",
+        "demod",
+        "simdemod3.py",
+    )
+    return script if os.path.exists(script) else None
+
+
+_GNURADIO_PYTHON_CACHE = None
+
+
+def _find_gnuradio_python():
+    global _GNURADIO_PYTHON_CACHE
+    if _GNURADIO_PYTHON_CACHE is not None:
+        return _GNURADIO_PYTHON_CACHE or None
+
+    candidates = [sys.executable]
+    for name in ("python3", "python"):
+        executable = shutil.which(name)
+        if executable and executable not in candidates:
+            candidates.append(executable)
+
+    for executable in candidates:
+        try:
+            result = subprocess.run(
+                [executable, "-c", "import gnuradio"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+        except Exception:
+            continue
+        if result.returncode == 0:
+            _GNURADIO_PYTHON_CACHE = executable
+            return executable
+
+    _GNURADIO_PYTHON_CACHE = ""
+    return None
+
+
+def _official_osmo_decoder_available():
+    if sys.platform.startswith("win"):
+        return False
+    return bool(
+        shutil.which("rtl_sdr")
+        and shutil.which("tetra-rx")
+        and _official_demod_script()
+        and _find_gnuradio_python()
+    )
+
+
+def _legacy_osmo_decoder_available():
+    return bool(
+        shutil.which("receiver1")
+        and shutil.which("tetra-rx")
+        and any(shutil.which(cmd) for cmd in ("demod_float", "float_to_bits"))
+    )
+
+
 LOG_DIR = os.path.expanduser("~")
 CONFIG_FILE = os.path.expanduser("~/.tetra_gui_config.json")
 logger = logging.getLogger("tetra")
@@ -861,10 +995,9 @@ class SetupWorker(QtCore.QThread):
     finished = QtCore.pyqtSignal()
 
     REQUIRED_CMDS = {
-        "receiver1": "osmocom-tetra",
-        "tetra-rx": "osmocom-tetra",
         "rtl_power": "rtl-sdr",
         "rtl_fm": "rtl-sdr",
+        "rtl_sdr": "rtl-sdr",
         "rtl_test": "rtl-sdr",
     }
     DEMOD_ALTERNATIVES = ("demod_float", "float_to_bits")
@@ -880,8 +1013,8 @@ class SetupWorker(QtCore.QThread):
     def detect_missing_requirements(cls):
         """Gibt ein Tupel mit fehlenden Befehlen, Modulen und optionalen Werkzeugen zurück."""
         missing_cmds = [cmd for cmd in cls.REQUIRED_CMDS if not shutil.which(cmd)]
-        if not any(shutil.which(cmd) for cmd in cls.DEMOD_ALTERNATIVES):
-            missing_cmds.append("demod_float/float_to_bits")
+        if not (_official_osmo_decoder_available() or _legacy_osmo_decoder_available()):
+            missing_cmds.append("osmocom-tetra decoder")
         missing_mods = [mod for mod in cls.PY_MODULES if not cls._has_module(mod)]
         missing_optional = []
 
@@ -920,47 +1053,24 @@ class SetupWorker(QtCore.QThread):
             else:
                 self.log.emit(f"{cmd} fehlt - bitte {pkg} manuell installieren")
 
-        if not any(shutil.which(cmd) for cmd in self.DEMOD_ALTERNATIVES):
-            if self._run_install_script() and any(
-                shutil.which(cmd) for cmd in self.DEMOD_ALTERNATIVES
+        if not (_official_osmo_decoder_available() or _legacy_osmo_decoder_available()):
+            if self._run_install_script() and (
+                _official_osmo_decoder_available() or _legacy_osmo_decoder_available()
             ):
                 pass
             elif sys.platform.startswith("linux"):
                 self.log.emit(
-                    f"Installiere {self.DEMOD_ALTERNATIVES[0]} oder "
-                    f"{self.DEMOD_ALTERNATIVES[1]} über apt ({self.DEMOD_PKG})"
+                    "osmocom-tetra Decoder fehlt. Bitte install.sh ausfuehren "
+                    "oder GNU Radio, tetra-rx und float_to_bits installieren."
                 )
-                self._run_cmd(["sudo", "apt-get", "install", "-y", self.DEMOD_PKG])
             elif sys.platform.startswith("win"):
-                if self.DEMOD_PKG in ("rtl-sdr", "osmocom-tetra"):
-                    if self._run_install_script() and any(
-                        shutil.which(cmd) for cmd in self.DEMOD_ALTERNATIVES
-                    ):
-                        pass
-                    else:
-                        self.log.emit(
-                            f"{self.DEMOD_ALTERNATIVES[0]} oder "
-                            f"{self.DEMOD_ALTERNATIVES[1]} fehlt - bitte "
-                            f"{self.DEMOD_PKG} manuell installieren"
-                        )
-                elif shutil.which("choco"):
-                    self.log.emit(
-                        f"Installiere {self.DEMOD_ALTERNATIVES[0]} oder "
-                        f"{self.DEMOD_ALTERNATIVES[1]} über choco ({self.DEMOD_PKG})"
-                    )
-                    self._run_cmd(["choco", "install", "-y", self.DEMOD_PKG])
-                else:
-                    self.log.emit(
-                        f"{self.DEMOD_ALTERNATIVES[0]} oder "
-                        f"{self.DEMOD_ALTERNATIVES[1]} fehlt - bitte "
-                        f"{self.DEMOD_PKG} manuell installieren"
-                    )
-            else:
                 self.log.emit(
-                    f"{self.DEMOD_ALTERNATIVES[0]} oder "
-                    f"{self.DEMOD_ALTERNATIVES[1]} fehlt - bitte "
-                    f"{self.DEMOD_PKG} manuell installieren"
+                    "osmocom-tetra Decoder fehlt. install.ps1 versucht WSL-Wrapper "
+                    "einzurichten; native Windows-Binaries muessen sonst manuell "
+                    "bereitgestellt werden."
                 )
+            else:
+                self.log.emit("osmocom-tetra Decoder fehlt - bitte manuell installieren.")
 
         for mod in self.PY_MODULES:
             if self._has_module(mod):
@@ -1077,17 +1187,18 @@ class SDRScanner(QtCore.QObject):
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                              stderr=subprocess.DEVNULL,
                                              text=True)
-        except FileNotFoundError:
-            # rtl_power nicht gefunden, Daten simulieren
+        except (FileNotFoundError, OSError):
+            # rtl_power nicht gefunden oder nicht startbar, Daten simulieren
             self._simulate_scan(f_start, f_end, bin_size)
             return
 
+        emitted_data = False
         while self._running.is_set():
             line = self._process.stdout.readline()
             if not line:
                 break
             parts = line.strip().split(',')
-            if len(parts) < 6:
+            if len(parts) < 7:
                 continue
             try:
                 # rtl_power gibt Startfrequenz (parts[2]), Schrittweite (parts[4]) und Leistungswerte aus
@@ -1096,14 +1207,22 @@ class SDRScanner(QtCore.QObject):
                 powers = np.array(list(map(float, parts[6:])))
             except ValueError:
                 continue
+            if powers.size == 0:
+                continue
             freqs = f0 + bin_hz * np.arange(len(powers))
             self.spectrum_ready.emit(freqs, powers)
+            emitted_data = True
             max_idx = np.argmax(powers)
             self.frequency_selected.emit(freqs[max_idx])
 
+        should_simulate = self._running.is_set() and not emitted_data
         if self._process:
-            self._process.terminate()
+            if self._process.poll() is None:
+                self._process.terminate()
             self._process = None
+        if should_simulate:
+            logger.info("rtl_power lieferte keine Spektrumsdaten; nutze Simulationsdaten.")
+            self._simulate_scan(f_start, f_end, bin_size)
 
     def _simulate_scan(self, f_start, f_end, bin_size):
         freqs = np.arange(f_start, f_end, bin_size)
@@ -1347,46 +1466,86 @@ class TetraDecoder(QtCore.QObject):
                 pass
         self._procs = []
 
-    def _run(self, frequency: float):
+    def _official_pipeline(self, frequency: float):
+        if sys.platform.startswith("win"):
+            return None
+        demod_script = _official_demod_script()
+        gnuradio_python = _find_gnuradio_python()
+        if (
+            not demod_script
+            or not gnuradio_python
+            or not shutil.which("rtl_sdr")
+            or not shutil.which("tetra-rx")
+        ):
+            return None
+
+        rtl_cmd = [
+            "rtl_sdr",
+            "-p", str(self.ppm),
+            "-f", str(int(frequency)),
+            "-s", "2000000",
+        ]
+        if self.device_id is not None:
+            rtl_cmd.extend(["-d", str(self.device_id)])
+        rtl_cmd.append("-")
+        return [
+            rtl_cmd,
+            [gnuradio_python, demod_script],
+            ["tetra-rx", "/dev/stdin"],
+        ]
+
+    def _legacy_pipeline(self, frequency: float, audio_enabled: bool):
         receiver_cmd = ["receiver1", "-f", str(int(frequency)), "-p", str(self.ppm)]
         if self.device_id is not None:
             receiver_cmd.extend(["-d", str(self.device_id)])
-        audio_enabled = True
 
+        if shutil.which("demod_float"):
+            demod_cmd = ["demod_float"]
+        elif shutil.which("float_to_bits"):
+            demod_cmd = ["float_to_bits"]
+        else:
+            demod_cmd = ["demod_float"]
+
+        return [
+            receiver_cmd,
+            demod_cmd,
+            ["tetra-rx"] + (["-a", self._audio_path] if audio_enabled else []),
+        ]
+
+    def _ensure_audio_output(self):
+        if not sys.platform.startswith("win") and hasattr(os, "mkfifo"):
+            self._audio_path = os.path.join(
+                tempfile.gettempdir(), f"tetra_audio_fifo_{os.getpid()}"
+            )
+            if os.path.exists(self._audio_path):
+                os.remove(self._audio_path)
+            os.mkfifo(self._audio_path)
+            self._audio_mode = "fifo"
+        else:
+            tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".raw")
+            self._audio_path = tmp_file.name
+            tmp_file.close()
+            self._audio_mode = "file"
+        self.output.emit(
+            f"Audioausgabe aktiviert ({self._audio_mode}), Pfad: {self._audio_path}"
+        )
+
+    def _run(self, frequency: float):
         self._procs = []
         self._audio_thread = None
         p3 = None
         try:
-            if audio_enabled:
-                if not sys.platform.startswith("win") and hasattr(os, "mkfifo"):
-                    self._audio_path = os.path.join(
-                        tempfile.gettempdir(), f"tetra_audio_fifo_{os.getpid()}"
-                    )
-                    if os.path.exists(self._audio_path):
-                        os.remove(self._audio_path)
-                    os.mkfifo(self._audio_path)
-                    self._audio_mode = "fifo"
-                else:
-                    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".raw")
-                    self._audio_path = tmp_file.name
-                    tmp_file.close()
-                    self._audio_mode = "file"
+            cmds = self._official_pipeline(frequency)
+            audio_enabled = False
+            if cmds:
                 self.output.emit(
-                    f"Audioausgabe aktiviert ({self._audio_mode}), Pfad: {self._audio_path}"
+                    "Nutze offizielle Osmocom-TETRA Pipeline "
+                    "(rtl_sdr -> simdemod3.py -> tetra-rx)."
                 )
-
-            if shutil.which("demod_float"):
-                demod_cmd = ["demod_float"]
-            elif shutil.which("float_to_bits"):
-                demod_cmd = ["float_to_bits"]
             else:
-                demod_cmd = ["demod_float"]
-
-            cmds = [
-                receiver_cmd,
-                demod_cmd,
-                ["tetra-rx"] + (["-a", self._audio_path] if audio_enabled else []),
-            ]
+                audio_enabled = True
+                self._ensure_audio_output()
+                cmds = self._legacy_pipeline(frequency, audio_enabled)
 
             # Prüfen, ob alle Befehle vor dem Start vorhanden sind
             for cmd in cmds:
