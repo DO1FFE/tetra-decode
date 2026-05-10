@@ -187,6 +187,23 @@ function Ensure-PythonAndPip {
     }
 }
 
+function Ensure-GnuRadio {
+    param([string] $ProjectRoot)
+    $gnuradioInstaller = Join-Path $ProjectRoot 'scripts\ensure_gnuradio_windows.ps1'
+    if (-not (Test-Path $gnuradioInstaller)) {
+        Write-Warning "ensure_gnuradio_windows.ps1 wurde nicht gefunden."
+        return
+    }
+    try {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $gnuradioInstaller
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "GNU Radio/Radioconda konnte nicht automatisch eingerichtet werden."
+        }
+    } catch {
+        Write-Warning "GNU Radio/Radioconda konnte nicht automatisch eingerichtet werden: $_"
+    }
+}
+
 Assert-Administrator
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -259,6 +276,7 @@ if ($nativeOsmocomReady) {
     }
 }
 
+Ensure-GnuRadio -ProjectRoot $projectRoot
 Ensure-PythonAndPip
 Install-PythonRequirements -ProjectRoot $projectRoot
 

@@ -31,6 +31,7 @@ Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Desktop-Verknuepfung erstellen"; GroupDescription: "Zusaetzliche Symbole:"; Flags: unchecked
 Name: "postinstalltools"; Description: "Zusatzkomponenten einrichten (RTL-SDR, Zadig, Osmocom-TETRA)"; GroupDescription: "Installation:"; Flags: checkedonce
+Name: "gnuradio"; Description: "GNU Radio/Radioconda fuer Live-Demodulation installieren (Download via winget/Chocolatey)"; GroupDescription: "Installation:"; Flags: checkedonce
 
 [Files]
 Source: "{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -55,10 +56,24 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{commonappdata}\tetra-decode\zadig"; Check: NeedsAddPath(ExpandConstant('{commonappdata}\tetra-decode\zadig')); Flags: preservestringtype
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\windows_postinstall.ps1"""; StatusMsg: "Zusatzkomponenten werden eingerichtet..."; Flags: runhidden waituntilterminated; Tasks: postinstalltools
+Filename: "powershell.exe"; Parameters: "{code:PostInstallParameters}"; StatusMsg: "Zusatzkomponenten werden eingerichtet..."; Flags: runhidden waituntilterminated; Check: ShouldRunPostInstall
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+function ShouldRunPostInstall(): Boolean;
+begin
+  Result := WizardIsTaskSelected('postinstalltools') or WizardIsTaskSelected('gnuradio');
+end;
+
+function PostInstallParameters(Param: string): string;
+begin
+  Result := '-NoProfile -ExecutionPolicy Bypass -File "' +
+    ExpandConstant('{app}\scripts\windows_postinstall.ps1') + '"';
+  if WizardIsTaskSelected('gnuradio') then begin
+    Result := Result + ' -InstallGnuRadio';
+  end;
+end;
+
 function NeedsAddPath(Path: string): Boolean;
 var
   CurrentPath: string;

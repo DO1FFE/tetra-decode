@@ -28,20 +28,23 @@ git submodule update --init --recursive
 ```
 
 Unter Windows initialisiert `scripts/ensure_osmocom_tetra.ps1` das Submodule
-und versucht den Build in WSL. Native Windows-Binaries von Osmocom-TETRA sind
-nicht zuverlässig verfügbar; die alte ZIP-Quelle kann eine Bot-Schutzseite
-statt eines Archivs liefern.
+und versucht den Build in WSL. Das Windows-Paket bringt zusätzlich native
+Osmocom-TETRA-Binaries mit; der WSL-/Source-Build bleibt nur als Fallback
+erhalten.
 
 Eine portable Windows-EXE liegt im Repo als `tetra-decode.exe`. Sie enthält die
-Python-GUI-Abhängigkeiten; externe SDR-/Osmocom-Tools bleiben separate
-System- oder Repo-nahe Tools.
+Python-GUI-Abhängigkeiten. SDR-/Osmocom-Tools werden vom Windows-Installer als
+Payload eingerichtet.
 
 ### Windows-Komplettpaket
 
 Der komplette Windows-Installer liegt unter `dist-installer` und installiert
 die App sowie RTL-SDR, Zadig und die gebuendelten nativen
 Osmocom-TETRA-Binaries (`tetra-rx.exe`, `float_to_bits.exe`). Der
-WSL-/Source-Build bleibt nur als Fallback erhalten.
+WSL-/Source-Build bleibt nur als Fallback erhalten. Für Live-Demodulation
+installiert die aktivierte Installer-Aufgabe GNU Radio/Radioconda über winget
+oder Chocolatey, weil das komplette GNU-Radio-Paket zu groß ist, um es
+sinnvoll direkt im Git-Repository zu versionieren.
 
 ## Funktionen
 
@@ -94,7 +97,7 @@ Wenn die Installation von `pyaudio` mit der Fehlermeldung `portaudio.h: No such 
 
 Falls beim Start die Meldung `ImportError: libgthread-2.0.so.0: cannot open shared object file` erscheint, fehlt die GLib-Laufzeitbibliothek. Installiere sie über den Paketmanager (z. B. `libglib2.0-0` unter APT, `glib2` unter DNF/Zypper/Pacman) und starte das Programm danach erneut.
 
-Auf Windows führst du stattdessen `setup.ps1` in einer administrativen PowerShell aus. Das Skript lädt fehlende Abhängigkeiten automatisch herunter, richtet die rtl-sdr-Hilfsprogramme sowie die osmocom-tetra-Binaries in `%ProgramData%\tetra-decode` ein und ergänzt den `PATH`. Chocolatey (wird bei Bedarf installiert) sorgt zusätzlich für Werkzeuge wie **Zadig** und SoX. Sollten einzelne Download-Quellen temporär nicht erreichbar sein, weist dich das Skript darauf hin und bietet die Möglichkeit zur manuellen Nachinstallation:
+Auf Windows führst du stattdessen `setup.ps1` in einer administrativen PowerShell aus. Das Skript lädt fehlende Abhängigkeiten automatisch herunter, richtet die rtl-sdr-Hilfsprogramme sowie die osmocom-tetra-Binaries in `%ProgramData%\tetra-decode` ein und ergänzt den `PATH`. Zusätzlich installiert es GNU Radio/Radioconda für die Live-Demodulation, bevorzugt über winget und mit Chocolatey als Fallback. Chocolatey (wird bei Bedarf installiert) sorgt außerdem für Werkzeuge wie **Zadig** und SoX. Sollten einzelne Download-Quellen temporär nicht erreichbar sein, weist dich das Skript darauf hin und bietet die Möglichkeit zur manuellen Nachinstallation:
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -150,7 +153,7 @@ Unter Linux kannst du `setup.sh` ausführen. Das Hilfsskript erkennt gängige Pa
 ./setup.sh
 ```
 
-Unter Windows startest du `setup.ps1` aus einer administrativen PowerShell. Das Skript bootstrapped Chocolatey bei Bedarf, lädt die rtl-sdr-Hilfsprogramme und die osmocom-tetra-Binärdateien nach `%ProgramData%\tetra-decode`, ergänzt den `PATH` und installiert anschließend die Python-Pakete. Wenn Download-Quellen vorübergehend nicht erreichbar sind, weist dich das Skript darauf hin, damit du die Dateien manuell bereitstellen kannst:
+Unter Windows startest du `setup.ps1` aus einer administrativen PowerShell. Das Skript bootstrapped Chocolatey bei Bedarf, lädt die rtl-sdr-Hilfsprogramme und die osmocom-tetra-Binärdateien nach `%ProgramData%\tetra-decode`, ergänzt den `PATH`, installiert GNU Radio/Radioconda für die Live-Demodulation und installiert anschließend die Python-Pakete. Wenn Download-Quellen vorübergehend nicht erreichbar sind, weist dich das Skript darauf hin, damit du die Dateien manuell bereitstellen kannst:
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force

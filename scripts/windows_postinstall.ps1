@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param()
+param(
+    [switch] $InstallGnuRadio
+)
 
 $ErrorActionPreference = 'Continue'
 $InstallRoot = Join-Path ${env:ProgramData} 'tetra-decode'
@@ -82,6 +84,26 @@ if ($osmocomComplete) {
     }
 } else {
     Write-Log 'WARNUNG: ensure_osmocom_tetra.ps1 wurde nicht gefunden.'
+}
+
+if ($InstallGnuRadio) {
+    $gnuradioInstaller = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'ensure_gnuradio_windows.ps1'
+    if (Test-Path $gnuradioInstaller) {
+        Write-Log 'Pruefe GNU Radio/Radioconda fuer Live-Demodulation.'
+        try {
+            & powershell -NoProfile -ExecutionPolicy Bypass -File $gnuradioInstaller *>&1 |
+                ForEach-Object { Write-Log $_.ToString() }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Log "WARNUNG: GNU Radio/Radioconda Setup meldete Exitcode $LASTEXITCODE."
+            }
+        } catch {
+            Write-Log "WARNUNG: GNU Radio/Radioconda konnte nicht automatisch eingerichtet werden: $_"
+        }
+    } else {
+        Write-Log 'WARNUNG: ensure_gnuradio_windows.ps1 wurde nicht gefunden.'
+    }
+} else {
+    Write-Log 'GNU Radio/Radioconda Installation wurde nicht angefordert.'
 }
 
 Write-Log 'Windows-Nachinstallation abgeschlossen.'

@@ -17,6 +17,7 @@ import tempfile
 import pkgutil
 import ctypes.util
 import shlex
+import glob
 try:
     import qdarkstyle
 except Exception:
@@ -150,18 +151,91 @@ _GNURADIO_PYTHON_CACHE = None
 _WSL_OSMO_CACHE = None
 
 
+def _gnuradio_python_candidates():
+    candidates = [] if getattr(sys, "frozen", False) else [sys.executable]
+    for name in ("python3", "python"):
+        executable = shutil.which(name)
+        if executable:
+            candidates.append(executable)
+
+    if sys.platform.startswith("win"):
+        env_roots = [
+            os.environ.get("RADIOCONDA_ROOT"),
+            os.environ.get("CONDA_PREFIX"),
+        ]
+        static_roots = [
+            os.path.join(os.environ.get("USERPROFILE", ""), "radioconda"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "radioconda"),
+            os.path.join(os.environ.get("ProgramFiles", ""), "radioconda"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", ""), "radioconda"),
+            os.path.join(os.environ.get("ProgramData", ""), "radioconda"),
+        ]
+        candidates.extend(
+            os.path.join(root, "python.exe")
+            for root in env_roots + static_roots
+            if root
+        )
+        for root in (
+            os.environ.get("ProgramFiles"),
+            os.environ.get("ProgramFiles(x86)"),
+            os.environ.get("ProgramData"),
+        ):
+            if not root:
+                continue
+            candidates.extend(glob.glob(os.path.join(root, "GNU Radio*", "bin", "python.exe")))
+            candidates.extend(glob.glob(os.path.join(root, "GNURadio*", "bin", "python.exe")))
+
+    unique = []
+    seen = set()
+    for candidate in candidates:
+        if not candidate or not os.path.exists(candidate):
+            continue
+        normalized = os.path.normcase(os.path.abspath(candidate))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(os.path.abspath(candidate))
+    return unique
+
+
+def _gnuradio_env_for(executable: str):
+    env = os.environ.copy()
+    if not sys.platform.startswith("win"):
+        return env
+    root = os.path.dirname(os.path.abspath(executable))
+    path_dirs = [
+        root,
+        os.path.join(root, "Library", "bin"),
+        os.path.join(root, "Scripts"),
+        os.path.join(root, "bin"),
+    ]
+    if os.path.basename(root).lower() == "bin":
+        parent = os.path.dirname(root)
+        path_dirs.extend([
+            parent,
+            os.path.join(parent, "Library", "bin"),
+            os.path.join(parent, "Scripts"),
+        ])
+    existing = [path for path in env.get("PATH", "").split(os.pathsep) if path]
+    promoted = []
+    for path in path_dirs:
+        if path and os.path.isdir(path) and path not in promoted:
+            promoted.append(path)
+    env["PATH"] = os.pathsep.join(promoted + existing)
+    return env
+
+
+def _promote_gnuradio_runtime(executable: str):
+    env = _gnuradio_env_for(executable)
+    os.environ["PATH"] = env.get("PATH", os.environ.get("PATH", ""))
+
+
 def _find_gnuradio_python():
     global _GNURADIO_PYTHON_CACHE
     if _GNURADIO_PYTHON_CACHE is not None:
         return _GNURADIO_PYTHON_CACHE or None
 
-    candidates = [] if getattr(sys, "frozen", False) else [sys.executable]
-    for name in ("python3", "python"):
-        executable = shutil.which(name)
-        if executable and executable not in candidates:
-            candidates.append(executable)
-
-    for executable in candidates:
+    for executable in _gnuradio_python_candidates():
         try:
             result = subprocess.run(
                 [executable, "-c", "import gnuradio"],
@@ -169,10 +243,12 @@ def _find_gnuradio_python():
                 stderr=subprocess.DEVNULL,
                 timeout=5,
                 check=False,
+                env=_gnuradio_env_for(executable),
             )
         except Exception:
             continue
         if result.returncode == 0:
+            _promote_gnuradio_runtime(executable)
             _GNURADIO_PYTHON_CACHE = executable
             return executable
 
