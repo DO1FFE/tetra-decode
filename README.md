@@ -36,6 +36,13 @@ Eine portable Windows-EXE liegt im Repo als `tetra-decode.exe`. Sie enthält die
 Python-GUI-Abhängigkeiten; externe SDR-/Osmocom-Tools bleiben separate
 System- oder Repo-nahe Tools.
 
+### Windows-Komplettpaket
+
+Der komplette Windows-Installer liegt unter `dist-installer` und installiert
+die App sowie RTL-SDR, Zadig und die gebuendelten nativen
+Osmocom-TETRA-Binaries (`tetra-rx.exe`, `float_to_bits.exe`). Der
+WSL-/Source-Build bleibt nur als Fallback erhalten.
+
 ## Funktionen
 
 - **Frequenzscan** – `rtl_power` durchsucht einen wählbaren Bereich und wählt automatisch das stärkste Signal aus.

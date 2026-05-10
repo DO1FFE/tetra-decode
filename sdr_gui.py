@@ -90,6 +90,7 @@ def _prepend_tool_paths():
     roots = [
         os.path.join(PROJECT_ROOT, "tools"),
         os.path.join(PROJECT_ROOT, "bin"),
+        os.path.join(PROJECT_ROOT, "installer_payload"),
     ]
     if sys.platform.startswith("win"):
         program_data = os.environ.get("ProgramData")
@@ -146,6 +147,7 @@ def _official_demod_script():
 
 
 _GNURADIO_PYTHON_CACHE = None
+_WSL_OSMO_CACHE = None
 
 
 def _find_gnuradio_python():
@@ -153,7 +155,7 @@ def _find_gnuradio_python():
     if _GNURADIO_PYTHON_CACHE is not None:
         return _GNURADIO_PYTHON_CACHE or None
 
-    candidates = [sys.executable]
+    candidates = [] if getattr(sys, "frozen", False) else [sys.executable]
     for name in ("python3", "python"):
         executable = shutil.which(name)
         if executable and executable not in candidates:
@@ -178,15 +180,66 @@ def _find_gnuradio_python():
     return None
 
 
-def _official_osmo_decoder_available():
-    if sys.platform.startswith("win"):
+def _wsl_path(path: str):
+    if not sys.platform.startswith("win") or not shutil.which("wsl.exe"):
+        return None
+    try:
+        result = subprocess.run(
+            ["wsl.exe", "wslpath", "-a", path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    converted = result.stdout.strip()
+    return converted or None
+
+
+def _wsl_osmo_decoder_available():
+    global _WSL_OSMO_CACHE
+    if _WSL_OSMO_CACHE is not None:
+        return _WSL_OSMO_CACHE
+    if not (sys.platform.startswith("win") and shutil.which("wsl.exe") and shutil.which("rtl_sdr")):
+        _WSL_OSMO_CACHE = False
         return False
+    demod_script = _official_demod_script()
+    wsl_demod_script = _wsl_path(demod_script) if demod_script else None
+    if not wsl_demod_script:
+        _WSL_OSMO_CACHE = False
+        return False
+    check_cmd = (
+        f"test -f {shlex.quote(wsl_demod_script)} && "
+        "command -v python3 >/dev/null && "
+        "python3 -c 'import gnuradio' >/dev/null 2>&1 && "
+        "command -v tetra-rx >/dev/null"
+    )
+    try:
+        result = subprocess.run(
+            ["wsl.exe", "--", "bash", "-lc", check_cmd],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            check=False,
+        )
+    except Exception:
+        _WSL_OSMO_CACHE = False
+        return False
+    _WSL_OSMO_CACHE = result.returncode == 0
+    return _WSL_OSMO_CACHE
+
+
+def _official_osmo_decoder_available():
     return bool(
         shutil.which("rtl_sdr")
         and shutil.which("tetra-rx")
         and _official_demod_script()
         and _find_gnuradio_python()
-    )
+    ) or (sys.platform.startswith("win") and _wsl_osmo_decoder_available())
 
 
 def _legacy_osmo_decoder_available():
@@ -1065,9 +1118,9 @@ class SetupWorker(QtCore.QThread):
                 )
             elif sys.platform.startswith("win"):
                 self.log.emit(
-                    "osmocom-tetra Decoder fehlt. install.ps1 versucht WSL-Wrapper "
-                    "einzurichten; native Windows-Binaries muessen sonst manuell "
-                    "bereitgestellt werden."
+                    "osmocom-tetra Decoder fehlt. Der Windows-Installer bringt "
+                    "tetra-rx/float_to_bits mit; fuer Live-Demodulation wird "
+                    "zusaetzlich GNU Radio Python oder WSL benoetigt."
                 )
             else:
                 self.log.emit("osmocom-tetra Decoder fehlt - bitte manuell installieren.")
@@ -1467,9 +1520,54 @@ class TetraDecoder(QtCore.QObject):
         self._procs = []
 
     def _official_pipeline(self, frequency: float):
-        if sys.platform.startswith("win"):
-            return None
         demod_script = _official_demod_script()
+        if sys.platform.startswith("win"):
+            gnuradio_python = _find_gnuradio_python()
+            native_available = bool(
+                demod_script
+                and gnuradio_python
+                and shutil.which("rtl_sdr")
+                and shutil.which("tetra-rx")
+            )
+            if native_available:
+                rtl_cmd = [
+                    "rtl_sdr",
+                    "-p", str(self.ppm),
+                    "-f", str(int(frequency)),
+                    "-s", "2000000",
+                ]
+                if self.device_id is not None:
+                    rtl_cmd.extend(["-d", str(self.device_id)])
+                rtl_cmd.append("-")
+                return [
+                    rtl_cmd,
+                    [gnuradio_python, demod_script],
+                    ["tetra-rx", "/dev/stdin"],
+                ]
+
+            wsl_demod_script = _wsl_path(demod_script) if demod_script else None
+            if (
+                wsl_demod_script
+                and shutil.which("wsl.exe")
+                and shutil.which("rtl_sdr")
+                and _wsl_osmo_decoder_available()
+            ):
+                rtl_cmd = [
+                    "rtl_sdr",
+                    "-p", str(self.ppm),
+                    "-f", str(int(frequency)),
+                    "-s", "2000000",
+                ]
+                if self.device_id is not None:
+                    rtl_cmd.extend(["-d", str(self.device_id)])
+                rtl_cmd.append("-")
+                return [
+                    rtl_cmd,
+                    ["wsl.exe", "--", "bash", "-lc", f"python3 {shlex.quote(wsl_demod_script)}"],
+                    ["wsl.exe", "--", "bash", "-lc", "tetra-rx /dev/stdin"],
+                ]
+            return None
+
         gnuradio_python = _find_gnuradio_python()
         if (
             not demod_script
