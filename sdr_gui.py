@@ -242,6 +242,10 @@ def _official_osmo_decoder_available():
     ) or (sys.platform.startswith("win") and _wsl_osmo_decoder_available())
 
 
+def _native_osmo_tools_available():
+    return bool(shutil.which("tetra-rx") and shutil.which("float_to_bits"))
+
+
 def _legacy_osmo_decoder_available():
     return bool(
         shutil.which("receiver1")
@@ -1066,7 +1070,11 @@ class SetupWorker(QtCore.QThread):
     def detect_missing_requirements(cls):
         """Gibt ein Tupel mit fehlenden Befehlen, Modulen und optionalen Werkzeugen zurück."""
         missing_cmds = [cmd for cmd in cls.REQUIRED_CMDS if not shutil.which(cmd)]
-        if not (_official_osmo_decoder_available() or _legacy_osmo_decoder_available()):
+        if not (
+            _official_osmo_decoder_available()
+            or _legacy_osmo_decoder_available()
+            or _native_osmo_tools_available()
+        ):
             missing_cmds.append("osmocom-tetra decoder")
         missing_mods = [mod for mod in cls.PY_MODULES if not cls._has_module(mod)]
         missing_optional = []
@@ -1075,6 +1083,17 @@ class SetupWorker(QtCore.QThread):
             missing_optional.append("zadig")
 
         return missing_cmds, missing_mods, missing_optional
+
+    @staticmethod
+    def decoder_notice():
+        if _official_osmo_decoder_available() or _legacy_osmo_decoder_available():
+            return None
+        if _native_osmo_tools_available():
+            return (
+                "Osmocom-TETRA-Binaries gefunden. Fuer Live-Demodulation wird "
+                "zusaetzlich GNU Radio Python oder WSL mit GNU Radio benoetigt."
+            )
+        return None
 
     @staticmethod
     def _has_module(name: str) -> bool:
@@ -1107,7 +1126,12 @@ class SetupWorker(QtCore.QThread):
                 self.log.emit(f"{cmd} fehlt - bitte {pkg} manuell installieren")
 
         if not (_official_osmo_decoder_available() or _legacy_osmo_decoder_available()):
-            if self._run_install_script() and (
+            if _native_osmo_tools_available():
+                self.log.emit(
+                    "Osmocom-TETRA-Binaries gefunden. Fuer Live-Demodulation wird "
+                    "zusaetzlich GNU Radio Python oder WSL mit GNU Radio benoetigt."
+                )
+            elif self._run_install_script() and (
                 _official_osmo_decoder_available() or _legacy_osmo_decoder_available()
             ):
                 pass
@@ -1173,6 +1197,16 @@ class SetupWorker(QtCore.QThread):
         if sys.platform.startswith("win"):
             script = os.path.join(PROJECT_ROOT, "install.ps1")
             if not os.path.exists(script):
+                return False
+            try:
+                is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+            except Exception:
+                is_admin = False
+            if not is_admin:
+                self.log.emit(
+                    "install.ps1 benoetigt Administratorrechte. Starte die App "
+                    "als Administrator oder nutze den Windows-Installer erneut."
+                )
                 return False
             self._install_script_ran = True
             self.log.emit("Starte install.ps1, um fehlende Abhängigkeiten zu installieren...")
@@ -1895,6 +1929,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.setup_worker = None
         missing_cmds, missing_mods, missing_optional = SetupWorker.detect_missing_requirements()
+        decoder_notice = SetupWorker.decoder_notice()
+        if decoder_notice:
+            self.log.appendPlainText(decoder_notice)
         if missing_cmds or missing_mods or missing_optional:
             self.log.appendPlainText("Starte automatische Pr\u00fcfung der Zusatzprogramme...")
             if missing_cmds:
@@ -1918,9 +1955,12 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self.setup_worker.start()
         else:
-            self.log.appendPlainText(
-                "Alle ben\u00f6tigten Zusatzprogramme wurden bereits gefunden."
-            )
+            if decoder_notice:
+                self.log.appendPlainText("Alle installierten Basiswerkzeuge wurden gefunden.")
+            else:
+                self.log.appendPlainText(
+                    "Alle ben\u00f6tigten Zusatzprogramme wurden bereits gefunden."
+                )
 
     def _build_tabs(self):
         """Erstellt die Haupt-Tabs inklusive TETRA-Dekodierung."""
