@@ -28,7 +28,9 @@ function Install-ChocoPackage {
     )
 
     if (-not (Get-Command choco -ErrorAction SilentlyContinue)) { return }
-    $alreadyInstalled = choco list --local-only --exact $Name | Select-String "^$Name " -Quiet
+    $escapedName = [regex]::Escape($Name)
+    $alreadyInstalled = choco list --exact $Name --limit-output |
+        Select-String "^$escapedName\|" -Quiet
     if ($alreadyInstalled) {
         return
     }
@@ -135,7 +137,10 @@ function Install-ToolArchive {
 
     $existing = $true
     foreach ($binary in $BinaryNames) {
-        if (-not (Get-Command $binary -ErrorAction SilentlyContinue)) {
+        $fromPath = Get-Command $binary -ErrorAction SilentlyContinue
+        $fromTarget = Get-ChildItem -Path $TargetDirectory -Filter $binary -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if (-not $fromPath -and -not $fromTarget) {
             $existing = $false
             break
         }
@@ -219,11 +224,46 @@ function Ensure-PythonAndPip {
     }
 }
 
+function Ensure-GnuRadio {
+    param([string] $ProjectRoot)
+    $gnuradioInstaller = Join-Path $ProjectRoot 'scripts\ensure_gnuradio_windows.ps1'
+    if (-not (Test-Path $gnuradioInstaller)) {
+        Write-Warning "ensure_gnuradio_windows.ps1 wurde nicht gefunden."
+        return
+    }
+    try {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $gnuradioInstaller
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "GNU Radio/Radioconda konnte nicht automatisch eingerichtet werden."
+        }
+    } catch {
+        Write-Warning "GNU Radio/Radioconda konnte nicht automatisch eingerichtet werden: $_"
+    }
+}
+
 Assert-Administrator
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $installRoot = Join-Path ${env:ProgramData} 'tetra-decode'
 Ensure-Directory $installRoot
+
+$bundledOsmocom = Join-Path $projectRoot 'installer_payload\osmocom-tetra'
+if (Test-Path (Join-Path $bundledOsmocom 'tetra-rx.exe')) {
+    $osmocomTarget = Join-Path $installRoot 'osmocom-tetra'
+    Ensure-Directory $osmocomTarget
+    Copy-Item -Path (Join-Path $bundledOsmocom '*') -Destination $osmocomTarget -Recurse -Force
+}
+
+foreach ($bundledPath in @(
+    (Join-Path $installRoot 'rtl-sdr\x64'),
+    (Join-Path $installRoot 'rtl-sdr\x86'),
+    (Join-Path $installRoot 'osmocom-tetra'),
+    (Join-Path $installRoot 'zadig')
+)) {
+    if (Test-Path $bundledPath) {
+        Add-ToPath $bundledPath
+    }
+}
 
 Ensure-Chocolatey
 Install-ChocoPackage -Name zadig
@@ -249,12 +289,12 @@ $toolTargets = @(
            'https://downloads.osmocom.org/attachments/download/3446/osmo-tetra-win64-20200512.zip'
        );
        ManualSteps = @(
-           'Lade das Windows-Binary-Archiv von der OsmocomTETRA-Wiki-Seite: https://osmocom.org/projects/tetra/wiki/OsmocomTETRA',
-           'Entpacke das Archiv nach ' + (Join-Path $installRoot 'osmocom-tetra') + ' und stelle sicher, dass die Tools (receiver1.exe, tetra-rx.exe, demod_float.exe) enthalten sind.',
+           'Nutze bevorzugt den mitgelieferten Ordner installer_payload\osmocom-tetra.',
+           'Alternativ baue tetra-rx.exe und float_to_bits.exe aus third_party/osmo-tetra und lege sie nach ' + (Join-Path $installRoot 'osmocom-tetra') + '.',
            'Stelle sicher, dass das Zielverzeichnis im PATH liegt.'
        );
        Target = Join-Path $installRoot 'osmocom-tetra';
-       Binaries = @('receiver1.exe','tetra-rx.exe','demod_float.exe') }
+       Binaries = @('tetra-rx.exe','float_to_bits.exe') }
 )
 
 foreach ($tool in $toolTargets) {
@@ -266,7 +306,11 @@ foreach ($tool in $toolTargets) {
 }
 
 $sourceInstaller = Join-Path $projectRoot 'scripts\ensure_osmocom_tetra.ps1'
-if (Test-Path $sourceInstaller) {
+$nativeOsmocomReady = (Test-Path (Join-Path $installRoot 'osmocom-tetra\tetra-rx.exe')) -and
+    (Test-Path (Join-Path $installRoot 'osmocom-tetra\float_to_bits.exe'))
+if ($nativeOsmocomReady) {
+    Write-Host "Native osmocom-tetra Windows-Binaries sind vorhanden."
+} elseif (Test-Path $sourceInstaller) {
     try {
         & powershell -NoProfile -ExecutionPolicy Bypass -File $sourceInstaller
     } catch {
@@ -274,6 +318,7 @@ if (Test-Path $sourceInstaller) {
     }
 }
 
+Ensure-GnuRadio -ProjectRoot $projectRoot
 Ensure-PythonAndPip
 Install-PythonRequirements -ProjectRoot $projectRoot
 

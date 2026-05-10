@@ -1,0 +1,25 @@
+Osmocom-TETRA Windows payload
+=============================
+
+This directory contains native Windows command line tools used by the
+TETRA Decode installer:
+
+- tetra-rx.exe
+- float_to_bits.exe
+- msys-2.0.dll
+- msys-gcc_s-seh-1.dll
+
+The EXE files were built from third_party/osmo-tetra with a small Windows
+portability patch in the local build tree:
+
+- GSMTAP/Wireshark UDP output is disabled for this Windows payload.
+- TUN/TAP output is disabled for this Windows payload.
+- libosmocore 1.7.0 core objects and talloc 2.4.2 are linked statically.
+- MSYS2 runtime DLLs are bundled beside the EXE files.
+
+Source references:
+
+- Osmocom TETRA: third_party/osmo-tetra
+- libosmocore 1.7.0: https://downloads.osmocom.org/releases/libosmocore/libosmocore-1.7.0.tar.bz2
+- talloc 2.4.2: https://download.samba.org/pub/talloc/talloc-2.4.2.tar.gz
+- MSYS2 runtime: https://github.com/msys2/msys2-installer/releases
