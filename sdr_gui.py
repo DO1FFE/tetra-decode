@@ -2794,41 +2794,62 @@ class DecodedAudioPlayer(QtCore.QObject):
         self._wav = None
 
     def start(self, record: bool = False):
-        self.stop()
-        self.record = record
-        if self._pa is None:
-            self._pa = pyaudio.PyAudio()
-        self._stream = self._pa.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=8000,
-            output=True,
-            frames_per_buffer=1024,
-        )
-        if record:
-            path = os.path.expanduser("~/TetraVoice")
-            os.makedirs(path, exist_ok=True)
-            name = datetime.now().strftime("voice_%Y%m%d_%H%M%S.wav")
-            self._wav = wave.open(os.path.join(path, name), "wb")
-            self._wav.setnchannels(1)
-            self._wav.setsampwidth(2)
-            self._wav.setframerate(8000)
+        try:
+            self.stop()
+            self.record = record
+            if self._pa is None:
+                self._pa = pyaudio.PyAudio()
+            self._stream = self._pa.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=8000,
+                output=True,
+                frames_per_buffer=1024,
+            )
+            if record:
+                path = os.path.expanduser("~/TetraVoice")
+                os.makedirs(path, exist_ok=True)
+                name = datetime.now().strftime("voice_%Y%m%d_%H%M%S.wav")
+                self._wav = wave.open(os.path.join(path, name), "wb")
+                self._wav.setnchannels(1)
+                self._wav.setsampwidth(2)
+                self._wav.setframerate(8000)
+            return True
+        except Exception as exc:
+            logger.warning("Dekodierte Audiowiedergabe konnte nicht starten: %s", exc)
+            self.stop()
+            return False
 
     def stop(self):
         if self._stream:
-            self._stream.stop_stream()
-            self._stream.close()
+            try:
+                self._stream.stop_stream()
+            except Exception:
+                pass
+            try:
+                self._stream.close()
+            except Exception:
+                pass
             self._stream = None
         if self._wav:
-            self._wav.close()
+            try:
+                self._wav.close()
+            except Exception:
+                pass
             self._wav = None
 
     def process(self, data: bytes):
         if not self._stream:
-            return
-        self._stream.write(data)
-        if self._wav:
-            self._wav.writeframes(data)
+            return False
+        try:
+            self._stream.write(data)
+            if self._wav:
+                self._wav.writeframes(data)
+            return True
+        except Exception as exc:
+            logger.warning("Dekodierte Audiowiedergabe wurde gestoppt: %s", exc)
+            self.stop()
+            return False
 
 
 class PcmAudioStreamClient(QtCore.QObject):
@@ -3496,6 +3517,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dec_audio_player = DecodedAudioPlayer(parent=self)
         self.stream_audio_player = DecodedAudioPlayer(parent=self)
         self.audio_stream_client = PcmAudioStreamClient(parent=self)
+        self._stream_record_requested = False
 
         self.scheduler_timer = QtCore.QTimer(self)
         self.scheduler_timer.timeout.connect(self.run_scheduled_cycle)
@@ -3889,10 +3911,17 @@ class MainWindow(QtWidgets.QMainWindow):
         audio_index = self.audio_mode_combo.findData(audio_mode)
         self.audio_mode_combo.setCurrentIndex(audio_index if audio_index >= 0 else 0)
         audio_bar.addWidget(self.audio_mode_combo)
-        self.play_audio_cb = QtWidgets.QCheckBox("Audio aktiv")
+        self.play_audio_cb = QtWidgets.QCheckBox("Decoder-Audio")
+        self.play_audio_cb.setToolTip(
+            "Aktiviert Audio aus einer audiofähigen Decoder-Kette. "
+            "Der Live-Stream wird separat gestartet."
+        )
         self.play_audio_cb.setChecked(self.audio_mode_combo.currentData() != "off")
         audio_bar.addWidget(self.play_audio_cb)
-        self.record_audio_cb = QtWidgets.QCheckBox("als WAV speichern")
+        self.record_audio_cb = QtWidgets.QCheckBox("WAV speichern")
+        self.record_audio_cb.setToolTip(
+            "Schreibt nur dann WAV-Dateien, wenn dieser Haken bewusst gesetzt ist."
+        )
         self.record_audio_cb.setChecked(bool(self.config.get("record_audio", False)))
         audio_bar.addWidget(self.record_audio_cb)
         audio_bar.addStretch()
@@ -3925,6 +3954,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "PCM 16 Bit, mono, 8000 Hz, ohne Mitschnitt"
         )
         self.audio_stream_status_label.setObjectName("statusDetail")
+        self.audio_stream_status_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         stream_bar.addWidget(self.audio_stream_status_label)
         stream_bar.addStretch()
         audio_data_layout.addLayout(stream_bar)
@@ -4511,12 +4541,14 @@ class MainWindow(QtWidgets.QMainWindow):
         host, port = self._audio_stream_endpoint()
         self.config["audio_stream_host"] = host
         self.config["audio_stream_port"] = int(port)
-        record = bool(self.record_audio_cb.isChecked())
-        self.stream_audio_player.start(record=record)
+        self._stream_record_requested = bool(self.record_audio_cb.isChecked())
+        self.stream_audio_player.stop()
         self.audio_stream_start_btn.setEnabled(False)
         self.audio_stream_stop_btn.setEnabled(True)
         self.audio_stream_status_label.setText(f"Verbinde {host}:{port}")
+        self.audio_stream_status_label.setToolTip(f"Verbinde {host}:{port}")
         self.audio_status_label.setText("Audio-Status: Stream verbindet")
+        self.audio_status_label.setToolTip(f"Verbinde {host}:{port}")
         self.audio_stream_client.start(host, port)
         self._refresh_dashboard_status()
 
@@ -4541,11 +4573,34 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(str)
     def _stream_status(self, text: str):
+        kurz, detail = self._format_stream_status(text)
+        if text.startswith("Stream verbunden"):
+            if not self.stream_audio_player.start(record=self._stream_record_requested):
+                kurz = "Audiogerät nicht verfügbar"
+                detail = "Der Stream ist verbunden, aber der Audioausgang konnte nicht geöffnet werden."
         if hasattr(self, "audio_stream_status_label"):
-            self.audio_stream_status_label.setText(text)
+            self.audio_stream_status_label.setText(kurz)
+            self.audio_stream_status_label.setToolTip(detail)
         if hasattr(self, "audio_status_label"):
-            self.audio_status_label.setText(f"Audio-Status: {text}")
+            self.audio_status_label.setText(f"Audio-Status: {kurz}")
+            self.audio_status_label.setToolTip(detail)
         self._refresh_dashboard_status()
+
+    def _format_stream_status(self, text: str):
+        host, port = self._audio_stream_endpoint()
+        detail = text
+        lower = text.lower()
+        if "nicht verbunden" in lower:
+            if "10061" in text or "connection refused" in lower or "verweigert" in lower:
+                return f"Kein Audio-Backend auf {host}:{port}", detail
+            return f"Stream nicht verbunden ({host}:{port})", detail
+        if text.startswith("Stream verbunden"):
+            return f"Stream verbunden ({host}:{port})", detail
+        if text.startswith("Stream verbindet"):
+            return f"Stream verbindet ({host}:{port})", detail
+        if text.startswith("Stream beendet"):
+            return "Stream beendet", detail
+        return text, detail
 
     @QtCore.pyqtSlot(float)
     def _stream_level(self, level: float):
@@ -4966,11 +5021,13 @@ class MainWindow(QtWidgets.QMainWindow):
         audio_mode = self._audio_mode()
         audio_requested = audio_mode != "off" and self.play_audio_cb.isChecked()
         if audio_requested and self.decoder.audio_output_supported():
-            self.dec_audio_player.start(record=rec)
-            if audio_mode == "always":
-                self.audio_status_label.setText("Audio-Status: Wiedergabe aktiv")
+            if self.dec_audio_player.start(record=rec):
+                if audio_mode == "always":
+                    self.audio_status_label.setText("Audio-Status: Wiedergabe aktiv")
+                else:
+                    self.audio_status_label.setText("Audio-Status: wartet auf unverschlüsselte Sprache")
             else:
-                self.audio_status_label.setText("Audio-Status: wartet auf unverschlüsselte Sprache")
+                self.audio_status_label.setText("Audio-Status: Audiogerät nicht verfügbar")
         elif audio_requested:
             self.audio_status_label.setText(
                 "Audio-Status: keine audiofähige Decoder-Kette verfügbar"
