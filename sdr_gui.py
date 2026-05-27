@@ -19,6 +19,8 @@ import ctypes.util
 import shlex
 import glob
 import socket
+import faulthandler
+import traceback
 try:
     import qdarkstyle
 except Exception:
@@ -657,6 +659,7 @@ def _extract_sysinfo(line: str):
 
 LOG_DIR = os.path.expanduser("~")
 CONFIG_FILE = os.path.expanduser("~/.tetra_gui_config.json")
+CRASH_LOG_FILE = os.path.join(LOG_DIR, "tetra_crash.log")
 logger = logging.getLogger("tetra")
 handler = TimedRotatingFileHandler(
     os.path.join(LOG_DIR, "tetra.log"), when="midnight", backupCount=7, encoding="utf-8"
@@ -664,6 +667,56 @@ handler = TimedRotatingFileHandler(
 handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
+_CRASH_LOG_HANDLE = None
+
+
+def _install_crash_logging():
+    """Schreibt Python- und native Fehlerspuren in eine kompakte Crash-Datei."""
+    global _CRASH_LOG_HANDLE
+    if _CRASH_LOG_HANDLE is not None:
+        return
+
+    try:
+        _CRASH_LOG_HANDLE = open(CRASH_LOG_FILE, "a", encoding="utf-8", buffering=1)
+        _CRASH_LOG_HANDLE.write(
+            f"\n--- Start {datetime.now().isoformat(timespec='seconds')} ---\n"
+        )
+        faulthandler.enable(file=_CRASH_LOG_HANDLE, all_threads=True)
+    except Exception:
+        _CRASH_LOG_HANDLE = None
+        return
+
+    original_excepthook = sys.excepthook
+
+    def logge_ausnahme(exc_type, exc_value, exc_traceback):
+        logger.exception(
+            "Unbehandelte Ausnahme",
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
+        try:
+            _CRASH_LOG_HANDLE.write(
+                f"\nUnbehandelte Ausnahme {datetime.now().isoformat(timespec='seconds')}\n"
+            )
+            traceback.print_exception(
+                exc_type,
+                exc_value,
+                exc_traceback,
+                file=_CRASH_LOG_HANDLE,
+            )
+        except Exception:
+            pass
+        original_excepthook(exc_type, exc_value, exc_traceback)
+
+    sys.excepthook = logge_ausnahme
+
+    if hasattr(threading, "excepthook"):
+        original_threading_excepthook = threading.excepthook
+
+        def logge_thread_ausnahme(args):
+            logge_ausnahme(args.exc_type, args.exc_value, args.exc_traceback)
+            original_threading_excepthook(args)
+
+        threading.excepthook = logge_thread_ausnahme
 
 ERSTELLUNGSJAHR = 2026
 APP_NAME = "TETRA Decode"
@@ -918,6 +971,8 @@ def _capture_rtl_sdr_iq(
     ppm: int,
     gain,
     device_id=None,
+    stop_event: threading.Event | None = None,
+    proc_callback=None,
 ):
     samples = max(16_384, int(sample_rate * seconds))
     cmd = [
@@ -931,14 +986,39 @@ def _capture_rtl_sdr_iq(
     if device_id is not None:
         cmd.extend(["-d", str(device_id)])
     cmd.append("-")
+    proc = None
+    timeout_seconds = max(8.0, float(seconds) + 8.0)
+    deadline = time.time() + timeout_seconds
     try:
-        raw = subprocess.check_output(
+        proc = subprocess.Popen(
             cmd,
+            stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=max(8, int(seconds) + 8),
             **_hidden_subprocess_kwargs(),
         )
+        if proc_callback:
+            proc_callback(proc)
+
+        while True:
+            if stop_event is not None and not stop_event.is_set():
+                _terminate_process_list([proc])
+                raise RuntimeError("rtl_sdr-Aufnahme abgebrochen.")
+            remaining = max(0.05, min(0.25, deadline - time.time()))
+            try:
+                raw, _ = proc.communicate(timeout=remaining)
+                break
+            except subprocess.TimeoutExpired:
+                if time.time() >= deadline:
+                    _terminate_process_list([proc])
+                    raise RuntimeError(
+                        f"rtl_sdr-Aufnahme fehlgeschlagen: Timeout nach "
+                        f"{timeout_seconds:.1f} Sekunden."
+                    )
+    except RuntimeError:
+        raise
     except Exception as exc:
+        if proc and proc.poll() is None:
+            _terminate_process_list([proc])
         raise RuntimeError(f"rtl_sdr-Aufnahme fehlgeschlagen: {exc}") from exc
     if len(raw) < 4096:
         raise RuntimeError(f"rtl_sdr lieferte zu wenige IQ-Daten ({len(raw)} Byte).")
@@ -954,6 +1034,8 @@ def _estimate_reference_peak(
     seconds: float = 1.0,
     tune_offset_hz: float = 50_000.0,
     search_span_hz: float = 100_000.0,
+    stop_event: threading.Event | None = None,
+    proc_callback=None,
 ):
     tune_hz = reference_hz - tune_offset_hz
     raw = _capture_rtl_sdr_iq(
@@ -963,6 +1045,8 @@ def _estimate_reference_peak(
         ppm,
         gain,
         device_id=device_id,
+        stop_event=stop_event,
+        proc_callback=proc_callback,
     )
     iq_u8 = np.frombuffer(raw, dtype=np.uint8)
     if iq_u8.size % 2:
@@ -1894,9 +1978,22 @@ class CalibrationWorker(QtCore.QThread):
         self.ppm = ppm
         self.gain = gain
         self._running = threading.Event()
+        self._procs = []
+        self._proc_lock = threading.RLock()
 
     def stop(self):
         self._running.clear()
+        self._terminate_processes()
+
+    def _add_proc(self, proc):
+        with self._proc_lock:
+            self._procs.append(proc)
+
+    def _terminate_processes(self):
+        with self._proc_lock:
+            procs = list(self._procs)
+            self._procs = []
+        _terminate_process_list(procs)
 
     def run(self):
         self._running.set()
@@ -1907,15 +2004,24 @@ class CalibrationWorker(QtCore.QThread):
 
             gain_for_ppm = self.gain
             if self.mode in ("gain", "both"):
-                gain_result = self._auto_gain()
+                try:
+                    gain_result = self._auto_gain()
+                except Exception as exc:
+                    self.log.emit(f"RF-Gain-Automatik fehlgeschlagen: {exc}")
+                    gain_result = None
                 if gain_result and self._running.is_set():
                     gain_for_ppm = gain_result["gain"]
                     self.gain_ready.emit(gain_result)
 
             if self.mode in ("ppm", "both") and self._running.is_set():
-                self._auto_ppm(gain_for_ppm)
+                try:
+                    self._auto_ppm(gain_for_ppm)
+                except Exception as exc:
+                    if self._running.is_set():
+                        self.log.emit(f"PPM-Kalibrierung fehlgeschlagen: {exc}")
         finally:
             self._running.clear()
+            self._terminate_processes()
 
     def _auto_ppm(self, gain):
         self.log.emit(
@@ -1929,7 +2035,11 @@ class CalibrationWorker(QtCore.QThread):
             seconds=3.0,
             tune_offset_hz=self._tune_offset_hz(),
             search_span_hz=self.search_span_hz,
+            stop_event=self._running,
+            proc_callback=self._add_proc,
         )
+        if not self._running.is_set():
+            return
         exact_ppm = self.ppm + result["ppm_delta"]
         result["old_ppm"] = int(self.ppm)
         result["new_ppm_exact"] = float(exact_ppm)
@@ -1966,6 +2076,8 @@ class CalibrationWorker(QtCore.QThread):
                     seconds=0.55,
                     tune_offset_hz=self._tune_offset_hz(),
                     search_span_hz=self.search_span_hz,
+                    stop_event=self._running,
+                    proc_callback=self._add_proc,
                 )
             except Exception as exc:
                 self.log.emit(f"Gain {gain:.1f} dB konnte nicht gemessen werden: {exc}")
@@ -3482,6 +3594,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._signal_search_rows = {}
         self._overview_signal_rows = {}
         self.calibration_worker = None
+        self._closing = False
         self.monitoring_active = False
         self.monitor_timer = QtCore.QTimer(self)
         self.monitor_timer.setSingleShot(True)
@@ -3670,7 +3783,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
 
         if self.config.get("calibrate_on_start", False):
-            QtCore.QTimer.singleShot(1500, lambda: self.start_calibration("both"))
+            QtCore.QTimer.singleShot(1500, self._start_calibration_on_start)
 
     def _build_modern_tabs(self):
         """Erstellt die moderne Hauptoberfläche."""
@@ -4754,6 +4867,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _run_monitoring_cycle(self):
         if not self.monitoring_active:
             return
+        if self._closing:
+            return
         if self.calibration_worker and self.calibration_worker.isRunning():
             self.monitor_timer.start(2000)
             return
@@ -4816,8 +4931,15 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self._apply_gain_setting(float(self.rf_gain_spin.value()))
 
+    def _start_calibration_on_start(self):
+        if self._closing:
+            return
+        self.start_calibration("both")
+
     def start_calibration(self, mode: str = "both"):
         """Startet PPM- und/oder RF-Gain-Kalibrierung auf der Referenzfrequenz."""
+        if self._closing:
+            return
         if self.calibration_worker and self.calibration_worker.isRunning():
             self.log.appendPlainText("Kalibrierung läuft bereits.")
             return
@@ -4855,10 +4977,20 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         worker.stop()
         if wait:
-            worker.wait(2000)
+            if not worker.wait(12000):
+                text = "Kalibrierung reagierte nicht rechtzeitig und wird hart beendet."
+                logger.warning(text)
+                try:
+                    self.log.appendPlainText(text)
+                except RuntimeError:
+                    pass
+                worker.terminate()
+                worker.wait(3000)
 
     @QtCore.pyqtSlot(dict)
     def _apply_ppm_calibration(self, result: dict):
+        if self._closing:
+            return
         new_ppm = int(result.get("new_ppm", self.ppm_spin.value()))
         ppm_delta = float(result.get("ppm_delta", new_ppm - self.ppm_spin.value()))
         if abs(ppm_delta) > 25.0 or abs(new_ppm) > 50:
@@ -4884,6 +5016,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(dict)
     def _apply_gain_calibration(self, result: dict):
+        if self._closing:
+            return
         gain = float(result.get("gain", _resolve_gain_value(self.config.get("gain", "max"))))
         self.rf_gain_max_cb.blockSignals(True)
         self.rf_gain_max_cb.setChecked(False)
@@ -4904,6 +5038,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def _calibration_finished(self):
+        if self._closing:
+            self.calibration_worker = None
+            return
         if self.calibration_status_label.text() == "Kalibrierung läuft...":
             self.calibration_status_label.setText("Kalibrierung beendet.")
         self.calibration_worker = None
@@ -5356,8 +5493,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_dashboard_status()
 
     def closeEvent(self, event):
-        self.stop_calibration(wait=True)
-        self.stop_tetra_signal_search(wait=True)
+        self._closing = True
         self.stop()
         self._store_current_settings()
         self._persist_talkgroups_to_config()
@@ -5804,6 +5940,8 @@ if __name__ == "__main__":
         sys.argv = [sys.argv[0]] + rest_args
         _starte_cli_modus("CLI-Modus wurde per --cli angefordert.")
         raise SystemExit(0)
+
+    _install_crash_logging()
 
     if not _qt_xcb_verfuegbar():
         _starte_cli_modus(
