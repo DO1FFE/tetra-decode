@@ -32,3 +32,6 @@ sudo apt-get install nsis
 ```
 
 Das Ergebnis liegt unter `dist-installer/TETRA-Decode-Windows-Offline-Setup.exe` und enthält die App, RTL-SDR, Zadig, Osmocom-TETRA und Radioconda/GNU Radio.
+
+Im Installer gibt es eine Komponenten-Seite. `Desktop-Verknüpfung erstellen`
+ist dort standardmäßig aktiviert und kann bei Bedarf abgewählt werden.

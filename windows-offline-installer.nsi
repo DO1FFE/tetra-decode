@@ -30,6 +30,7 @@ VIAddVersionKey /LANG=1031 "LegalCopyright" "© 2026 Erik Schauer, do1ffe@darc.d
 !define MUI_ABORTWARNING
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -43,7 +44,8 @@ Function .onInit
   ${EndIf}
 FunctionEnd
 
-Section "TETRA Decode installieren" SEC01
+Section "TETRA Decode installieren" SEC_APP
+  SectionIn RO
   SetShellVarContext all
   SetOverwrite on
   ReadEnvStr $R9 "ProgramData"
@@ -85,8 +87,16 @@ Section "TETRA Decode installieren" SEC01
   CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$INSTDIR\${APPEXE}"
   CreateShortCut "$SMPROGRAMS\${APPNAME}\Zadig (RTL-SDR Treiber).lnk" "$R9\tetra-decode\zadig\zadig.exe"
   CreateShortCut "$SMPROGRAMS\${APPNAME}\Deinstallieren.lnk" "$INSTDIR\uninstall.exe"
-  CreateShortCut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\${APPEXE}"
+SectionEnd
 
+Section "Desktop-Verknüpfung erstellen" SEC_DESKTOP
+  SetShellVarContext current
+  CreateShortCut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\${APPEXE}"
+  SetShellVarContext all
+SectionEnd
+
+Section "-Laufzeitkomponenten einrichten" SEC_POSTINSTALL
+  SetShellVarContext all
   DetailPrint "Richte gebündelte Laufzeitkomponenten ein..."
   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\windows_postinstall.ps1" -InstallGnuRadio -RequireBundledGnuRadio' $0
   ${If} $0 != 0
@@ -99,11 +109,15 @@ Section "Deinstallieren"
   SetShellVarContext all
   ReadEnvStr $R9 "ProgramData"
 
+  SetShellVarContext current
+  Delete "$DESKTOP\${APPNAME}.lnk"
+  SetShellVarContext all
+  Delete "$DESKTOP\${APPNAME}.lnk"
+
   Delete "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk"
   Delete "$SMPROGRAMS\${APPNAME}\Zadig (RTL-SDR Treiber).lnk"
   Delete "$SMPROGRAMS\${APPNAME}\Deinstallieren.lnk"
   RMDir "$SMPROGRAMS\${APPNAME}"
-  Delete "$DESKTOP\${APPNAME}.lnk"
 
   Delete "$INSTDIR\uninstall.exe"
   RMDir /r "$INSTDIR"
