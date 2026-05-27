@@ -151,6 +151,19 @@ _GNURADIO_PYTHON_CACHE = None
 _WSL_OSMO_CACHE = None
 
 
+def _hidden_subprocess_kwargs():
+    """Verhindert sichtbare Konsolenfenster bei Hilfsprogrammen unter Windows."""
+    if not sys.platform.startswith("win"):
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
+
+
 def _gnuradio_python_candidates():
     candidates = [] if getattr(sys, "frozen", False) else [sys.executable]
     for name in ("python3", "python"):
@@ -244,6 +257,7 @@ def _find_gnuradio_python():
                 timeout=5,
                 check=False,
                 env=_gnuradio_env_for(executable),
+                **_hidden_subprocess_kwargs(),
             )
         except Exception:
             continue
@@ -267,6 +281,7 @@ def _wsl_path(path: str):
             text=True,
             timeout=8,
             check=False,
+            **_hidden_subprocess_kwargs(),
         )
     except Exception:
         return None
@@ -301,6 +316,7 @@ def _wsl_osmo_decoder_available():
             stderr=subprocess.DEVNULL,
             timeout=8,
             check=False,
+            **_hidden_subprocess_kwargs(),
         )
     except Exception:
         _WSL_OSMO_CACHE = False
@@ -346,7 +362,11 @@ def list_sdr_devices():
     devices = []
     try:
         out = subprocess.check_output(
-            ["rtl_test", "-t"], text=True, stderr=subprocess.STDOUT, timeout=5
+            ["rtl_test", "-t"],
+            text=True,
+            stderr=subprocess.STDOUT,
+            timeout=5,
+            **_hidden_subprocess_kwargs(),
         )
         for line in out.splitlines():
             match = re.match(r"^\s*(\d+):\s*(.+)$", line)
@@ -358,7 +378,12 @@ def list_sdr_devices():
         pass
     if not devices:
         try:
-            out = subprocess.check_output(["lsusb"], text=True, timeout=5)
+            out = subprocess.check_output(
+                ["lsusb"],
+                text=True,
+                timeout=5,
+                **_hidden_subprocess_kwargs(),
+            )
             for line in out.splitlines():
                 if "RTL" in line or "Realtek" in line:
                     label = line.strip()
@@ -461,7 +486,11 @@ def _ermittle_max_gain():
     fallback_gain = 49.6
     try:
         out = subprocess.check_output(
-            ["rtl_test", "-t"], text=True, stderr=subprocess.STDOUT, timeout=5
+            ["rtl_test", "-t"],
+            text=True,
+            stderr=subprocess.STDOUT,
+            timeout=5,
+            **_hidden_subprocess_kwargs(),
         )
     except Exception:
         _MAX_GAIN_CACHE = fallback_gain
@@ -1250,7 +1279,13 @@ class SetupWorker(QtCore.QThread):
 
     def _run_cmd(self, cmd):
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                **_hidden_subprocess_kwargs(),
+            )
             for line in proc.stdout:
                 self.log.emit(line.rstrip())
             proc.wait()
@@ -1349,7 +1384,8 @@ class SDRScanner(QtCore.QObject):
         try:
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                              stderr=subprocess.DEVNULL,
-                                             text=True)
+                                             text=True,
+                                             **_hidden_subprocess_kwargs())
         except (FileNotFoundError, OSError):
             # rtl_power nicht gefunden oder nicht startbar, Daten simulieren
             self._simulate_scan(f_start, f_end, bin_size)
@@ -1430,7 +1466,8 @@ class AudioPlayer(QtCore.QObject):
             cmd.extend(["-d", str(self.device_id)])
         try:
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                             stderr=subprocess.DEVNULL)
+                                             stderr=subprocess.DEVNULL,
+                                             **_hidden_subprocess_kwargs())
         except FileNotFoundError:
             return
 
@@ -1766,6 +1803,7 @@ class TetraDecoder(QtCore.QObject):
                 cmds[0],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
+                **_hidden_subprocess_kwargs(),
             )
             self._procs.append(p1)
             p2 = subprocess.Popen(
@@ -1773,6 +1811,7 @@ class TetraDecoder(QtCore.QObject):
                 stdin=p1.stdout,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
+                **_hidden_subprocess_kwargs(),
             )
             self._procs.append(p2)
             p1.stdout.close()
@@ -1783,6 +1822,7 @@ class TetraDecoder(QtCore.QObject):
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                **_hidden_subprocess_kwargs(),
             )
             p2.stdout.close()
             self._procs.append(p3)
