@@ -179,6 +179,7 @@ def _official_demod_script():
 
 _GNURADIO_PYTHON_CACHE = None
 _WSL_OSMO_CACHE = None
+_WSL_AUDIO_BACKEND_CACHE = None
 
 _RTL_U8_TO_COMPLEX64_SCRIPT = r"""
 import sys
@@ -369,6 +370,11 @@ def _find_gnuradio_python():
 def _wsl_path(path: str):
     if not sys.platform.startswith("win") or not shutil.which("wsl.exe"):
         return None
+    drive_match = re.match(r"^([A-Za-z]):\\(.*)$", os.path.abspath(path))
+    if drive_match:
+        drive = drive_match.group(1).lower()
+        rest = drive_match.group(2).replace("\\", "/")
+        return f"/mnt/{drive}/{rest}"
     try:
         result = subprocess.run(
             ["wsl.exe", "wslpath", "-a", path],
@@ -385,6 +391,59 @@ def _wsl_path(path: str):
         return None
     converted = result.stdout.strip()
     return converted or None
+
+
+def _wsl_resource_path(*parts):
+    for root in _resource_roots():
+        candidate = os.path.join(root, *parts)
+        if os.path.exists(candidate):
+            return _wsl_path(candidate)
+    return None
+
+
+def _wsl_tetra_audio_backend_paths():
+    if not (sys.platform.startswith("win") and shutil.which("wsl.exe")):
+        return None
+    paths = {
+        "backend": _wsl_resource_path("scripts", "tetra_audio_backend_wsl.py"),
+        "tetra_rx": _wsl_resource_path("tools", "osmocom-tetra", "bin", "tetra-rx"),
+        "cdecoder": _wsl_resource_path("tools", "tetra-codec", "bin", "cdecoder"),
+        "sdecoder": _wsl_resource_path("tools", "tetra-codec", "bin", "sdecoder"),
+    }
+    if all(paths.values()):
+        return paths
+    return None
+
+
+def _wsl_tetra_audio_backend_available():
+    global _WSL_AUDIO_BACKEND_CACHE
+    if _WSL_AUDIO_BACKEND_CACHE is not None:
+        return _WSL_AUDIO_BACKEND_CACHE
+    paths = _wsl_tetra_audio_backend_paths()
+    if not paths:
+        _WSL_AUDIO_BACKEND_CACHE = False
+        return False
+    check_cmd = (
+        "command -v python3 >/dev/null && "
+        f"test -x {shlex.quote(paths['tetra_rx'])} && "
+        f"test -x {shlex.quote(paths['cdecoder'])} && "
+        f"test -x {shlex.quote(paths['sdecoder'])} && "
+        f"test -f {shlex.quote(paths['backend'])}"
+    )
+    try:
+        result = subprocess.run(
+            ["wsl.exe", "--", "bash", "-lc", check_cmd],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            check=False,
+            **_hidden_subprocess_kwargs(),
+        )
+    except Exception:
+        _WSL_AUDIO_BACKEND_CACHE = False
+        return False
+    _WSL_AUDIO_BACKEND_CACHE = result.returncode == 0
+    return _WSL_AUDIO_BACKEND_CACHE
 
 
 def _wsl_osmo_decoder_available():
@@ -589,7 +648,10 @@ def _classify_tetra_lines(lines, bits_size=0):
         if encrypted:
             audio_status = "verschlüsselt"
         elif clear_audio and (voice_service or resource):
-            audio_status = "unverschlüsselt, Backend fehlt"
+            if _wsl_tetra_audio_backend_available() or _legacy_audio_decoder_available():
+                audio_status = "unverschlüsselt"
+            else:
+                audio_status = "unverschlüsselt, Backend fehlt"
         elif clear_audio:
             audio_status = "unverschlüsselt"
         elif voice_service:
@@ -700,6 +762,11 @@ def _audio_hinweis_aus_tetra_zeilen(lines, bits_size=0):
     info = _classify_tetra_lines(lines, bits_size)
     audio = str(info.get("audio", ""))
     if audio in ("unverschlüsselt, Backend fehlt", "unverschlüsselt", "Audio möglich"):
+        if _wsl_tetra_audio_backend_available() or _legacy_audio_decoder_available():
+            return (
+                "Audiohinweis: unverschlüsselte TETRA-Sprache ist signalisiert; "
+                "das Audio-Backend kann PCM ausgeben."
+            )
         return (
             "Audiohinweis: unverschlüsselte TETRA-Sprache ist signalisiert, "
             "aber die aktuelle Windows-Pipeline liefert kein PCM-Audio."
@@ -3173,6 +3240,149 @@ class PcmAudioStreamClient(QtCore.QObject):
             self.stopped.emit()
 
 
+class TetraAudioBackend:
+    """Startet die WSL-Codec-Kette und liefert PCM ohne dauerhafte Dateien."""
+
+    def __init__(self, output_callback, audio_callback, audio_mode: str = "safe"):
+        self.output_callback = output_callback
+        self.audio_callback = audio_callback
+        self.audio_mode = audio_mode or "safe"
+        self.port = 42100 + (os.getpid() % 1000)
+        self._proc = None
+        self._running = threading.Event()
+        self._muted = self.audio_mode != "always"
+        self._status = ""
+        self._threads = []
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def available():
+        return bool(_wsl_tetra_audio_backend_available())
+
+    def tetra_rx_command(self):
+        paths = _wsl_tetra_audio_backend_paths()
+        if not paths:
+            return None
+        exports = " ".join([
+            f"TETRA_AUDIO_UDP_PORT={int(self.port)}",
+            "TETRA_AUDIO_UDP_HOST=127.0.0.1",
+            "TETRA_AUDIO_RXID=1",
+        ])
+        return [
+            "wsl.exe",
+            "--",
+            "bash",
+            "-lc",
+            f"export {exports}; exec {shlex.quote(paths['tetra_rx'])} /dev/stdin",
+        ]
+
+    def start(self):
+        paths = _wsl_tetra_audio_backend_paths()
+        if not paths:
+            self.output_callback("Audioausgabe: TETRA-Audio-Backend fehlt.")
+            return False
+        cmd = (
+            f"exec python3 {shlex.quote(paths['backend'])} "
+            f"--udp-host 127.0.0.1 --udp-port {int(self.port)} "
+            f"--cdecoder {shlex.quote(paths['cdecoder'])} "
+            f"--sdecoder {shlex.quote(paths['sdecoder'])}"
+        )
+        try:
+            self._running.set()
+            self._proc = subprocess.Popen(
+                ["wsl.exe", "--", "bash", "-lc", cmd],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **_hidden_subprocess_kwargs(),
+            )
+        except Exception as exc:
+            self._running.clear()
+            self.output_callback(f"Audioausgabe: Backend konnte nicht starten: {exc}")
+            return False
+
+        self._threads = [
+            threading.Thread(target=self._read_pcm, daemon=True),
+            threading.Thread(target=self._read_status, daemon=True),
+        ]
+        for thread in self._threads:
+            thread.start()
+        if self._muted:
+            self.output_callback(
+                "Audioausgabe: Backend gestartet, wartet auf unverschlüsselte Sprache."
+            )
+        else:
+            self.output_callback("Audioausgabe: Backend gestartet, PCM wird wiedergegeben.")
+        return True
+
+    def stop(self):
+        self._running.clear()
+        proc = self._proc
+        self._proc = None
+        if proc and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        for thread in self._threads:
+            if thread.is_alive() and threading.current_thread() is not thread:
+                thread.join(timeout=0.5)
+        self._threads = []
+
+    def set_clear_audio(self):
+        if self.audio_mode == "off":
+            return
+        with self._lock:
+            war_stumm = self._muted
+            self._muted = False
+        if war_stumm:
+            self.output_callback("Audioausgabe: unverschlüsselte Sprache erkannt, PCM aktiv.")
+
+    def set_encrypted(self):
+        if self.audio_mode == "always":
+            return
+        with self._lock:
+            war_aktiv = not self._muted
+            self._muted = True
+        if war_aktiv:
+            self.output_callback("Audioausgabe: verschlüsseltes Signal erkannt, PCM stumm.")
+
+    def _read_pcm(self):
+        proc = self._proc
+        if not proc or not proc.stdout:
+            return
+        while self._running.is_set():
+            try:
+                data = proc.stdout.read(320)
+            except Exception:
+                break
+            if not data:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.02)
+                continue
+            with self._lock:
+                stumm = self._muted
+            if not stumm:
+                self.audio_callback(data)
+
+    def _read_status(self):
+        proc = self._proc
+        if not proc or not proc.stderr:
+            return
+        for raw in iter(proc.stderr.readline, b""):
+            if not self._running.is_set():
+                break
+            text = raw.decode("utf-8", errors="replace").strip()
+            if not text or text == self._status:
+                continue
+            self._status = text
+            self.output_callback(f"Audioausgabe: {text}")
+
+
 class TetraDecoder(QtCore.QObject):
     """Startet osmocom-tetra-Werkzeuge und liefert dekodierte Ausgabe."""
 
@@ -3192,12 +3402,15 @@ class TetraDecoder(QtCore.QObject):
         self._audio_thread = None
         self._audio_path = None
         self._audio_mode = None
+        self._live_audio_backend = None
+        self.audio_requested = False
+        self.requested_audio_mode = "safe"
         self.tune_frequency_hz = None
         self.iq_mode = "normal"
         self.xlate_hz = 0.0
 
     def audio_output_supported(self):
-        return _legacy_audio_decoder_available()
+        return TetraAudioBackend.available() or _legacy_audio_decoder_available()
 
     def start(self, frequency: float):
         """Startet die Dekodierkette für die angegebene Frequenz."""
@@ -3210,6 +3423,9 @@ class TetraDecoder(QtCore.QObject):
     def stop(self):
         """Stoppt die Dekodierung und beendet Kindprozesse."""
         self._running.clear()
+        if self._live_audio_backend:
+            self._live_audio_backend.stop()
+            self._live_audio_backend = None
         self._terminate_processes()
         if (
             self._audio_thread
@@ -3271,6 +3487,126 @@ class TetraDecoder(QtCore.QObject):
             and shutil.which("rtl_sdr")
             and shutil.which("tetra-rx")
         )
+
+    def _windows_audio_pipeline_available(self):
+        return bool(
+            sys.platform.startswith("win")
+            and _official_demod_script()
+            and _find_gnuradio_python()
+            and shutil.which("rtl_sdr")
+            and TetraAudioBackend.available()
+        )
+
+    def _run_windows_audio_pipeline(self, frequency: float):
+        demod_script = _official_demod_script()
+        gnuradio_python = _find_gnuradio_python()
+        backend = TetraAudioBackend(
+            output_callback=self.output.emit,
+            audio_callback=self.audio.emit,
+            audio_mode=self.requested_audio_mode,
+        )
+        if not demod_script or not gnuradio_python or not backend.start():
+            self.output.emit("Audioausgabe: Live-Backend konnte nicht gestartet werden.")
+            return
+
+        self._live_audio_backend = backend
+        tetra_rx_cmd = backend.tetra_rx_command()
+        if not tetra_rx_cmd:
+            self.output.emit("Audioausgabe: WSL-tetra-rx für Audio fehlt.")
+            backend.stop()
+            self._live_audio_backend = None
+            return
+
+        self.output.emit(
+            "Nutze audiofähige TETRA-Pipeline "
+            "(rtl_sdr -> Kanalfilter -> simdemod3.py -> WSL-tetra-rx -> ETSI-Codec)."
+        )
+        try:
+            conv_env = _gnuradio_env_for(gnuradio_python)
+            conv_env["TETRA_IQ_MODE"] = str(self.iq_mode or "normal")
+            channelizer_env = _gnuradio_env_for(gnuradio_python)
+            channelizer_env.update({
+                "TETRA_XLATE_HZ": str(float(self.xlate_hz or 0.0)),
+                "TETRA_LOW_PASS": "12500",
+                "TETRA_TRANSITION": "2500",
+                "TETRA_OUT_RATE": "36000",
+            })
+            p1 = subprocess.Popen(
+                self._rtl_sdr_cmd(frequency),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                **_hidden_subprocess_kwargs(),
+            )
+            self._procs.append(p1)
+            pconv = subprocess.Popen(
+                [gnuradio_python, "-u", "-c", _RTL_U8_TO_COMPLEX64_SCRIPT],
+                stdin=p1.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=conv_env,
+                **_hidden_subprocess_kwargs(),
+            )
+            self._procs.append(pconv)
+            if p1.stdout:
+                p1.stdout.close()
+            pchan = subprocess.Popen(
+                [gnuradio_python, "-u", "-c", _TETRA_CHANNELIZER_SCRIPT],
+                stdin=pconv.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=channelizer_env,
+                **_hidden_subprocess_kwargs(),
+            )
+            self._procs.append(pchan)
+            if pconv.stdout:
+                pconv.stdout.close()
+            p2 = subprocess.Popen(
+                [gnuradio_python, demod_script],
+                stdin=pchan.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                **_hidden_subprocess_kwargs(),
+            )
+            self._procs.append(p2)
+            if pchan.stdout:
+                pchan.stdout.close()
+            p3 = subprocess.Popen(
+                tetra_rx_cmd,
+                stdin=p2.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                **_hidden_subprocess_kwargs(),
+            )
+            self._procs.append(p3)
+            if p2.stdout:
+                p2.stdout.close()
+
+            if p3.stdout:
+                for line in p3.stdout:
+                    if not self._running.is_set():
+                        break
+                    txt = line.strip()
+                    if not txt or txt == "EOF":
+                        continue
+                    if _tetra_line_indicates_encryption(txt):
+                        backend.set_encrypted()
+                        self.encrypted.emit()
+                    elif _tetra_line_indicates_clear_audio(txt):
+                        backend.set_clear_audio()
+                    if _decoder_line_for_ui(txt):
+                        self.output.emit(txt)
+
+                    if any(proc.poll() is not None for proc in (p1, pconv, pchan, p2)):
+                        break
+        except Exception as exc:
+            self.output.emit(f"Audiofähige TETRA-Dekodierung fehlgeschlagen: {exc}")
+        finally:
+            backend.stop()
+            self._live_audio_backend = None
 
     def _official_pipeline(self, frequency: float):
         demod_script = _official_demod_script()
@@ -3514,6 +3850,10 @@ class TetraDecoder(QtCore.QObject):
         self._audio_thread = None
         p3 = None
         try:
+            if self.audio_requested and self._windows_audio_pipeline_available():
+                self._run_windows_audio_pipeline(frequency)
+                return
+
             if self._windows_native_batch_available():
                 self._run_windows_native_batches(frequency)
                 return
@@ -3586,6 +3926,9 @@ class TetraDecoder(QtCore.QObject):
             self.output.emit(f"Decoder konnte nicht gestartet werden: {exc}")
         finally:
             self._running.clear()
+            if self._live_audio_backend:
+                self._live_audio_backend.stop()
+                self._live_audio_backend = None
             self._terminate_processes()
             if (
                 self._audio_thread
@@ -5386,6 +5729,8 @@ class MainWindow(QtWidgets.QMainWindow):
         rec = self.record_audio_cb.isChecked()
         audio_mode = self._audio_mode()
         audio_requested = audio_mode != "off" and self.play_audio_cb.isChecked()
+        self.decoder.audio_requested = bool(audio_requested)
+        self.decoder.requested_audio_mode = audio_mode
         if audio_requested and self.decoder.audio_output_supported():
             if self.dec_audio_player.start(record=rec):
                 if audio_mode == "always":

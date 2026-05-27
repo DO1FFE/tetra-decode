@@ -1,0 +1,176 @@
+diff --git a/src/lower_mac/tetra_lower_mac.c b/src/lower_mac/tetra_lower_mac.c
+index d58f2ab..c563c64 100644
+--- a/src/lower_mac/tetra_lower_mac.c
++++ b/src/lower_mac/tetra_lower_mac.c
+@@ -24,6 +24,9 @@
+ #include <unistd.h>
+ #include <errno.h>
+ #include <linux/limits.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
+ 
+ #include <osmocom/core/utils.h>
+ #include <osmocom/core/msgb.h>
+@@ -112,6 +115,102 @@ struct tetra_cell_data {
+ 
+ static struct tetra_cell_data _tcd, *tcd = &_tcd;
+ 
++static int audio_udp_socket = -2;
++static struct sockaddr_in audio_udp_addr;
++static int audio_udp_rxid = 1;
++static int audio_udp_debug = 0;
++static int audio_udp_sent = 0;
++
++static void audio_udp_init(void)
++{
++	const char *port_text;
++	const char *host_text;
++	const char *rxid_text;
++	int port;
++
++	if (audio_udp_socket != -2)
++		return;
++
++	audio_udp_socket = -1;
++	audio_udp_debug = getenv("TETRA_AUDIO_DEBUG") ? 1 : 0;
++	port_text = getenv("TETRA_AUDIO_UDP_PORT");
++	if (!port_text || !*port_text) {
++		if (audio_udp_debug)
++			fprintf(stderr, "TETRA audio UDP disabled: TETRA_AUDIO_UDP_PORT fehlt\n");
++		return;
++	}
++
++	port = atoi(port_text);
++	if (port <= 0 || port > 65535) {
++		if (audio_udp_debug)
++			fprintf(stderr, "TETRA audio UDP disabled: ungültiger Port %d\n", port);
++		return;
++	}
++
++	host_text = getenv("TETRA_AUDIO_UDP_HOST");
++	if (!host_text || !*host_text)
++		host_text = "127.0.0.1";
++
++	rxid_text = getenv("TETRA_AUDIO_RXID");
++	if (rxid_text && *rxid_text)
++		audio_udp_rxid = atoi(rxid_text);
++
++	memset(&audio_udp_addr, 0, sizeof(audio_udp_addr));
++	audio_udp_addr.sin_family = AF_INET;
++	audio_udp_addr.sin_port = htons(port);
++	if (!inet_aton(host_text, &audio_udp_addr.sin_addr)) {
++		if (audio_udp_debug)
++			fprintf(stderr, "TETRA audio UDP disabled: ungültiger Host %s\n", host_text);
++		return;
++	}
++
++	audio_udp_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++	if (audio_udp_socket < 0)
++		audio_udp_socket = -1;
++	if (audio_udp_debug)
++		fprintf(stderr, "TETRA audio UDP %s %s:%d RX:%d\n",
++			audio_udp_socket >= 0 ? "aktiv" : "fehler", host_text, port, audio_udp_rxid);
++}
++
++static void audio_udp_send_traffic(int usage, const int16_t *block)
++{
++	uint8_t packet[13 + sizeof(int16_t) * 690];
++
++	audio_udp_init();
++	if (audio_udp_socket < 0)
++		return;
++
++	memset(packet, 0, sizeof(packet));
++	snprintf((char *)packet, 13, "TRA:%2.2x RX:%2.2x", usage & 0xff, audio_udp_rxid & 0xff);
++	memcpy(packet + 13, block, sizeof(int16_t) * 690);
++	sendto(audio_udp_socket, packet, sizeof(packet), 0,
++		(struct sockaddr *)&audio_udp_addr, sizeof(audio_udp_addr));
++	if (audio_udp_debug && audio_udp_sent < 5)
++		fprintf(stderr, "TETRA audio UDP send usage=%d bytes=%zu\n", usage, sizeof(packet));
++	audio_udp_sent++;
++}
++
++static void build_traffic_audio_block(const uint8_t *type4, int16_t *block)
++{
++	int i;
++
++	memset(block, 0x00, sizeof(int16_t) * 690);
++	for (i = 0; i < 6; i++)
++		block[115*i] = 0x6b21 + i;
++
++	for (i = 0; i < 114; i++)
++		block[1+i] = type4[i] ? -127 : 127;
++
++	for (i = 0; i < 114; i++)
++		block[116+i] = type4[114+i] ? -127 : 127;
++
++	for (i = 0; i < 114; i++)
++		block[231+i] = type4[228+i] ? -127 : 127;
++
++	for (i = 0; i < 90; i++)
++		block[346+i] = type4[342+i] ? -127 : 127;
++}
++
+ int is_bsch(struct tetra_tdma_time *tm)
+ {
+ 	if (tm->fn == 18 && tm->tn == 4 - ((tm->mn+1)%4))
+@@ -194,17 +293,21 @@ void tp_sap_udata_ind(enum tp_sap_data_type type, int blk_num, const uint8_t *bi
+ 	if (tms->cur_burst.is_traffic && type == TPSAP_T_NDB && blk_num == BLK_1)
+ 		tms->cur_burst.blk1_stolen = true;
+ 
+-	/* If this is a traffic channel and we have a dump output directory, dump. */
+-	if (tms->dumpdir &&
+-	    tms->cur_burst.is_traffic &&
++	/* If this is a traffic channel, optionally stream audio and dump debug data. */
++	if (tms->cur_burst.is_traffic &&
+ 	    (type == TPSAP_T_SCH_F || (blk_num == BLK_2 && !tms->cur_burst.blk2_stolen))) {
+ 
+ 		char fname[PATH_MAX];
+ 		int16_t block[690];
+ 		FILE *f;
+-		int i;
+ 
+-		/* Open target file */
++		/* Generate a block */
++		build_traffic_audio_block(type4, block);
++		audio_udp_send_traffic(tms->cur_burst.is_traffic, block);
++
++		if (!tms->dumpdir)
++			goto traffic_stream_done;
++
+ 		snprintf(fname, sizeof(fname), "%s/traffic_%d_%d.out", tms->dumpdir,
+ 			tms->cur_burst.is_traffic, tms->tsn);
+ 		f = fopen(fname, "ab");
+@@ -213,23 +316,6 @@ void tp_sap_udata_ind(enum tp_sap_data_type type, int blk_num, const uint8_t *bi
+ 			exit(1);
+ 		}
+ 
+-		/* Generate a block */
+-		memset(block, 0x00, sizeof(int16_t) * 690);
+-		for (i = 0; i < 6; i++)
+-			block[115*i] = 0x6b21 + i;
+-
+-		for (i = 0; i < 114; i++)
+-			block[1+i] = type4[i] ? -127 : 127;
+-
+-		for (i = 0; i < 114; i++)
+-			block[116+i] = type4[114+i] ? -127 : 127;
+-
+-		for (i = 0; i < 114; i++)
+-			block[231+i] = type4[228+i] ? -127 : 127;
+-
+-		for (i = 0; i < 90; i++)
+-			block[346+i] = type4[342+i] ? -127 : 127;
+-
+ 		/* Write it */
+ 		fwrite(block, sizeof(int16_t), 690, f);
+ 		fclose(f);
+@@ -242,6 +328,7 @@ void tp_sap_udata_ind(enum tp_sap_data_type type, int blk_num, const uint8_t *bi
+ 		fclose(f);
+ 		goto out;
+ 	}
++traffic_stream_done:
+ 
+ 	if (tbp->interleave_a) {
+ 		/* Run block deinterleaving: type-3 bits */
