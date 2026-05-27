@@ -9,3 +9,5 @@ dist/
 
 *.spec
 tools/osmocom-tetra/
+installer_payload/gnuradio/
+dist-installer/TETRA-Decode-Windows-Offline-Setup.exe*

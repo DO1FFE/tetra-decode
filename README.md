@@ -39,12 +39,13 @@ Payload eingerichtet.
 ### Windows-Komplettpaket
 
 Der komplette Windows-Installer liegt unter `dist-installer` und installiert
-die App sowie RTL-SDR, Zadig und die gebuendelten nativen
+die App sowie RTL-SDR, Zadig und die gebündelten nativen
 Osmocom-TETRA-Binaries (`tetra-rx.exe`, `float_to_bits.exe`). Der
 WSL-/Source-Build bleibt nur als Fallback erhalten. Für Live-Demodulation
-installiert die aktivierte Installer-Aufgabe GNU Radio/Radioconda über winget
-oder Chocolatey, weil das komplette GNU-Radio-Paket zu groß ist, um es
-sinnvoll direkt im Git-Repository zu versionieren.
+wird Radioconda/GNU Radio beim Installer-Build als Payload eingebettet und
+während der Installation lokal installiert. Das Zielsystem benötigt dafür
+weder winget noch Chocolatey noch Internet-Zugriff.
+Details zum reproduzierbaren Windows-Build stehen in `WINDOWS_INSTALLER.md`.
 
 ## Funktionen
 
@@ -97,19 +98,10 @@ Wenn die Installation von `pyaudio` mit der Fehlermeldung `portaudio.h: No such 
 
 Falls beim Start die Meldung `ImportError: libgthread-2.0.so.0: cannot open shared object file` erscheint, fehlt die GLib-Laufzeitbibliothek. Installiere sie über den Paketmanager (z. B. `libglib2.0-0` unter APT, `glib2` unter DNF/Zypper/Pacman) und starte das Programm danach erneut.
 
-Auf Windows führst du stattdessen `setup.ps1` in einer administrativen PowerShell aus. Das Skript lädt fehlende Abhängigkeiten automatisch herunter, richtet die rtl-sdr-Hilfsprogramme sowie die osmocom-tetra-Binaries in `%ProgramData%\tetra-decode` ein und ergänzt den `PATH`. Zusätzlich installiert es GNU Radio/Radioconda für die Live-Demodulation, bevorzugt über winget und mit Chocolatey als Fallback. Chocolatey (wird bei Bedarf installiert) sorgt außerdem für Werkzeuge wie **Zadig** und SoX. Sollten einzelne Download-Quellen temporär nicht erreichbar sein, weist dich das Skript darauf hin und bietet die Möglichkeit zur manuellen Nachinstallation:
-
-```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force
-.\setup.ps1
-```
-
-Für nachträgliche Ergänzungen steht außerdem `install.ps1` bereit. Das Skript erkennt fehlende Werkzeuge oder Python-Module und lädt sie – inklusive Chocolatey-Bootstrap – automatisch nach:
-
-```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force
-.\install.ps1
-```
+Unter Windows nutzt du bevorzugt den Offline-Installer aus dem GitHub-Release.
+Er bringt die Anwendung, RTL-SDR, Zadig, Osmocom-TETRA und Radioconda/GNU Radio
+mit und richtet die benötigten Pfade automatisch ein. `setup.ps1` und
+`install.ps1` bleiben nur als Entwickler-/Fallback-Skripte im Repository.
 
 ### PowerShell-Fehler wegen Ausführungsrichtlinie
 
@@ -153,19 +145,10 @@ Unter Linux kannst du `setup.sh` ausführen. Das Hilfsskript erkennt gängige Pa
 ./setup.sh
 ```
 
-Unter Windows startest du `setup.ps1` aus einer administrativen PowerShell. Das Skript bootstrapped Chocolatey bei Bedarf, lädt die rtl-sdr-Hilfsprogramme und die osmocom-tetra-Binärdateien nach `%ProgramData%\tetra-decode`, ergänzt den `PATH`, installiert GNU Radio/Radioconda für die Live-Demodulation und installiert anschließend die Python-Pakete. Wenn Download-Quellen vorübergehend nicht erreichbar sind, weist dich das Skript darauf hin, damit du die Dateien manuell bereitstellen kannst:
-
-```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force
-.\setup.ps1
-```
-
-Für Nachinstallationen gibt es zusätzlich `install.ps1`. Das Hilfsskript erkennt fehlende Werkzeuge oder Python-Module und lädt sie automatisch nach (inklusive Chocolatey-Bootstrap, falls nötig):
-
-```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force
-.\install.ps1
-```
+Unter Windows nutzt du bevorzugt den Offline-Installer aus dem GitHub-Release.
+Er installiert alle benötigten Zusatzkomponenten lokal mit, damit die Anwendung
+direkt nach der Installation startbereit ist. `setup.ps1` und `install.ps1`
+bleiben nur als Entwickler-/Fallback-Skripte erhalten.
 
 ## Funktionen
 

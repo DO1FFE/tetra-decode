@@ -1,15 +1,23 @@
-; Inno Setup script for the complete TETRA Decode Windows package.
+; Inno-Setup-Skript für das komplette TETRA-Decode-Windows-Paket.
 
 #define AppName "TETRA Decode"
+#ifndef AppVersion
 #define AppVersion "1.0.0"
-#define AppPublisher "TETRA Decode"
+#endif
+#define AppPublisher "Erik Schauer"
 #define AppExeName "tetra-decode.exe"
+#ifexist "dist\tetra-decode.exe"
+#define AppExeSource "dist\tetra-decode.exe"
+#else
+#define AppExeSource "tetra-decode.exe"
+#endif
 
 [Setup]
 AppId={{C5E7D93E-9C2B-4B47-9A3B-54E7CBEF9B1B}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
+AppCopyright=© 2026 Erik Schauer, do1ffe@darc.de
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -24,26 +32,31 @@ PrivilegesRequired=admin
 ChangesEnvironment=yes
 CloseApplications=yes
 RestartApplications=no
+VersionInfoCompany={#AppPublisher}
+VersionInfoDescription={#AppName} Windows-Komplettpaket
+VersionInfoProductName={#AppName}
+VersionInfoProductVersion={#AppVersion}
+VersionInfoVersion={#AppVersion}
+VersionInfoCopyright=© 2026 Erik Schauer, do1ffe@darc.de
 
 [Languages]
 Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Desktop-Verknuepfung erstellen"; GroupDescription: "Zusaetzliche Symbole:"; Flags: unchecked
-Name: "postinstalltools"; Description: "Zusatzkomponenten einrichten (RTL-SDR, Zadig, Osmocom-TETRA)"; GroupDescription: "Installation:"; Flags: checkedonce
-Name: "gnuradio"; Description: "GNU Radio/Radioconda fuer Live-Demodulation installieren (Download via winget/Chocolatey)"; GroupDescription: "Installation:"; Flags: checkedonce
+Name: "desktopicon"; Description: "Desktop-Verknüpfung erstellen"; GroupDescription: "Zusätzliche Symbole:"; Flags: unchecked
 
 [Files]
-Source: "{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#AppExeSource}"; DestDir: "{app}"; DestName: "{#AppExeName}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "requirements.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "setup.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "install.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "scripts\*"; DestDir: "{app}\scripts"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "third_party\osmo-tetra\*"; DestDir: "{app}\third_party\osmo-tetra"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "third_party\osmo-tetra\*"; DestDir: "{app}\third_party\osmo-tetra"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "installer_payload\rtl-sdr\x64\*"; DestDir: "{commonappdata}\tetra-decode\rtl-sdr\x64"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "installer_payload\osmocom-tetra\*"; DestDir: "{commonappdata}\tetra-decode\osmocom-tetra"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "installer_payload\zadig\zadig.exe"; DestDir: "{commonappdata}\tetra-decode\zadig"; Flags: ignoreversion
+Source: "installer_payload\gnuradio\*"; DestDir: "{commonappdata}\tetra-decode\gnuradio"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
@@ -56,21 +69,28 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{commonappdata}\tetra-decode\zadig"; Check: NeedsAddPath(ExpandConstant('{commonappdata}\tetra-decode\zadig')); Flags: preservestringtype
 
 [Run]
-Filename: "powershell.exe"; Parameters: "{code:PostInstallParameters}"; StatusMsg: "Zusatzkomponenten werden eingerichtet..."; Flags: runhidden waituntilterminated; Check: ShouldRunPostInstall
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-function ShouldRunPostInstall(): Boolean;
-begin
-  Result := WizardIsTaskSelected('postinstalltools') or WizardIsTaskSelected('gnuradio');
-end;
-
-function PostInstallParameters(Param: string): string;
+function PostInstallParameters(): string;
 begin
   Result := '-NoProfile -ExecutionPolicy Bypass -File "' +
-    ExpandConstant('{app}\scripts\windows_postinstall.ps1') + '"';
-  if WizardIsTaskSelected('gnuradio') then begin
-    Result := Result + ' -InstallGnuRadio';
+    ExpandConstant('{app}\scripts\windows_postinstall.ps1') +
+    '" -InstallGnuRadio -RequireBundledGnuRadio';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+begin
+  if CurStep = ssPostInstall then begin
+    WizardForm.StatusLabel.Caption := 'Gebündelte Laufzeitkomponenten werden eingerichtet...';
+    if not Exec('powershell.exe', PostInstallParameters(), '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then begin
+      RaiseException('Die Windows-Nachinstallation konnte nicht gestartet werden.');
+    end;
+    if ResultCode <> 0 then begin
+      RaiseException('Die Windows-Nachinstallation wurde mit Fehlern beendet. Details stehen in %ProgramData%\tetra-decode\windows-postinstall.log.');
+    end;
   end;
 end;
 
@@ -89,3 +109,5 @@ begin
 
   Result := Pos(';' + Uppercase(Path) + ';', ';' + Uppercase(CurrentPath) + ';') = 0;
 end;
+
+; © 2026 Erik Schauer, do1ffe@darc.de

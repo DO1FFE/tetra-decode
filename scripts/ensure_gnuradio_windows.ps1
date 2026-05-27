@@ -1,7 +1,11 @@
 [CmdletBinding()]
-param()
+param(
+    [switch] $RequireBundledGnuRadio
+)
 
 $ErrorActionPreference = 'Continue'
+$InstallRoot = Join-Path ${env:ProgramData} 'tetra-decode'
+$BundledGnuRadioRoot = Join-Path $InstallRoot 'gnuradio'
 
 function Write-Step {
     param([string] $Message)
@@ -96,6 +100,70 @@ function Find-GnuRadioPython {
     return $null
 }
 
+function Test-InstallerChecksum {
+    param([Parameter(Mandatory)] [System.IO.FileInfo] $Installer)
+
+    $checksumPath = "$($Installer.FullName).sha256"
+    if (-not (Test-Path $checksumPath)) {
+        Write-Step "Keine Prüfsumme für $($Installer.Name) gefunden; überspringe Integritätsprüfung."
+        return $true
+    }
+
+    try {
+        $expected = ((Get-Content -Path $checksumPath -TotalCount 1) -split '\s+')[0].ToLowerInvariant()
+        $actual = (Get-FileHash -Path $Installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($expected -ne $actual) {
+            Write-Warning "Radioconda-Prüfsumme stimmt nicht. Erwartet: $expected, erhalten: $actual"
+            return $false
+        }
+        Write-Step "Radioconda-Prüfsumme geprüft: $actual"
+        return $true
+    } catch {
+        Write-Warning "Radioconda-Prüfsumme konnte nicht geprüft werden: $_"
+        return $false
+    }
+}
+
+function Install-BundledRadioconda {
+    $python = Find-GnuRadioPython
+    if ($python) {
+        Write-Step "GNU Radio Python gefunden: $python"
+        return $true
+    }
+
+    if (-not (Test-Path $BundledGnuRadioRoot)) {
+        return $false
+    }
+
+    $installer = Get-ChildItem -Path $BundledGnuRadioRoot -Filter 'radioconda-*-Windows-x86_64.exe' -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+    if (-not $installer) {
+        return $false
+    }
+
+    if (-not (Test-InstallerChecksum -Installer $installer)) {
+        return $false
+    }
+
+    $target = Join-Path ${env:ProgramData} 'radioconda'
+    Write-Step "Installiere gebündelte Radioconda/GNU-Radio-Version nach $target ..."
+    $process = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$target") -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        Write-Warning "Gebündelte Radioconda-Installation meldete Exitcode $($process.ExitCode)."
+        return $false
+    }
+
+    $python = Find-GnuRadioPython
+    if ($python) {
+        Write-Step "GNU Radio Python installiert: $python"
+        return $true
+    }
+
+    Write-Warning 'Gebündelte Radioconda-Installation wurde ausgeführt, aber GNU Radio Python wurde nicht erkannt.'
+    return $false
+}
+
 function Install-GnuRadio {
     $python = Find-GnuRadioPython
     if ($python) {
@@ -103,9 +171,18 @@ function Install-GnuRadio {
         return $true
     }
 
+    if (Install-BundledRadioconda) {
+        return $true
+    }
+
+    if ($RequireBundledGnuRadio) {
+        Write-Warning 'Gebündeltes Radioconda/GNU Radio wurde angefordert, ist aber nicht installierbar. Netzwerk-Fallbacks werden übersprungen.'
+        return $false
+    }
+
     $winget = Get-Command winget -ErrorAction SilentlyContinue
     if ($winget) {
-        Write-Step 'Installiere Radioconda/GNU Radio ueber winget...'
+        Write-Step 'Installiere Radioconda/GNU Radio über winget...'
         & winget install --id ryanvolz.radioconda --source winget --silent --accept-package-agreements --accept-source-agreements
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "winget konnte Radioconda/GNU Radio nicht installieren. Exitcode: $LASTEXITCODE"
@@ -119,7 +196,7 @@ function Install-GnuRadio {
 
     $choco = Get-Command choco -ErrorAction SilentlyContinue
     if ($choco) {
-        Write-Step 'Installiere GNU Radio ueber Chocolatey...'
+        Write-Step 'Installiere GNU Radio über Chocolatey...'
         & choco install -y gnuradio
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "Chocolatey konnte GNU Radio nicht installieren. Exitcode: $LASTEXITCODE"
@@ -139,3 +216,5 @@ if (Install-GnuRadio) {
     exit 0
 }
 exit 1
+
+# © 2026 Erik Schauer, do1ffe@darc.de
