@@ -44,7 +44,7 @@ Function .onInit
   ${EndIf}
 FunctionEnd
 
-Section "TETRA Decode installieren" SEC_APP
+Section "Programmdateien" SEC_APP
   SectionIn RO
   SetShellVarContext all
   SetOverwrite on
@@ -89,7 +89,7 @@ Section "TETRA Decode installieren" SEC_APP
   CreateShortCut "$SMPROGRAMS\${APPNAME}\Deinstallieren.lnk" "$INSTDIR\uninstall.exe"
 SectionEnd
 
-Section "Desktop-Verknüpfung erstellen" SEC_DESKTOP
+Section "Desktop-Symbol" SEC_DESKTOP
   SetShellVarContext current
   CreateShortCut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\${APPEXE}"
   SetShellVarContext all
@@ -105,7 +105,7 @@ Section "-Laufzeitkomponenten einrichten" SEC_POSTINSTALL
   ${EndIf}
 SectionEnd
 
-Section "Deinstallieren"
+Section "Uninstall"
   SetShellVarContext all
   ReadEnvStr $R9 "ProgramData"
 
