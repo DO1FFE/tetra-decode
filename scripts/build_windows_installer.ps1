@@ -113,6 +113,11 @@ function Pruefe-Payload {
         @{ Pfad = 'installer_payload\osmocom-tetra\float_to_bits.exe'; Beschreibung = 'Osmocom-TETRA float_to_bits.exe' },
         @{ Pfad = 'installer_payload\osmocom-tetra\msys-2.0.dll'; Beschreibung = 'MSYS2-Laufzeitbibliothek' },
         @{ Pfad = 'installer_payload\osmocom-tetra\msys-gcc_s-seh-1.dll'; Beschreibung = 'GCC-SEH-Laufzeitbibliothek' },
+        @{ Pfad = 'installer_payload\wsl-audio-backend\tools\osmocom-tetra\bin\tetra-rx'; Beschreibung = 'WSL-Audio-Backend tetra-rx' },
+        @{ Pfad = 'installer_payload\wsl-audio-backend\tools\osmocom-tetra\lib\libosmocore.so.16'; Beschreibung = 'WSL-Audio-Backend libosmocore' },
+        @{ Pfad = 'installer_payload\wsl-audio-backend\tools\tetra-codec\bin\tetra-audio-backend'; Beschreibung = 'WSL-Audio-Backend Programm' },
+        @{ Pfad = 'installer_payload\wsl-audio-backend\tools\tetra-codec\bin\cdecoder'; Beschreibung = 'WSL-Audio-Backend cdecoder' },
+        @{ Pfad = 'installer_payload\wsl-audio-backend\tools\tetra-codec\bin\sdecoder'; Beschreibung = 'WSL-Audio-Backend sdecoder' },
         @{ Pfad = 'installer_payload\zadig\zadig.exe'; Beschreibung = 'Zadig-Treiberwerkzeug' },
         @{ Pfad = 'third_party\osmo-tetra\src\demod\simdemod3.py'; Beschreibung = 'Osmocom-TETRA Demodulator-Skript' }
     )

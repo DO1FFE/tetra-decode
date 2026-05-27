@@ -39,12 +39,12 @@ Payload eingerichtet.
 ### Windows-Komplettpaket
 
 Der komplette Windows-Installer liegt unter `dist-installer` und installiert
-die App sowie RTL-SDR, Zadig und die gebündelten nativen
-Osmocom-TETRA-Binaries (`tetra-rx.exe`, `float_to_bits.exe`). Der
-WSL-/Source-Build bleibt nur als Fallback erhalten. Für Live-Demodulation
-wird Radioconda/GNU Radio beim Installer-Build als Payload eingebettet und
-während der Installation lokal installiert. Das Zielsystem benötigt dafür
-weder winget noch Chocolatey noch Internet-Zugriff.
+die App, RTL-SDR, Zadig, die gebündelten nativen Osmocom-TETRA-Binaries
+(`tetra-rx.exe`, `float_to_bits.exe`), Radioconda/GNU Radio und das
+vollständige WSL-Live-Audio-Backend. Das Backend enthält vorgebaute
+x86_64-Linux-Werkzeuge, `cdecoder`, `sdecoder`, `tetra-audio-backend` und die
+benötigten Linux-Bibliotheken. Das Zielsystem benötigt dafür weder winget noch
+Chocolatey noch Internet-Zugriff.
 Details zum reproduzierbaren Windows-Build stehen in `WINDOWS_INSTALLER.md`.
 
 ## Funktionen
@@ -151,9 +151,11 @@ direkt nach der Installation startbereit ist. `setup.ps1` und `install.ps1`
 bleiben nur als Entwickler-/Fallback-Skripte erhalten.
 
 Für Live-Audio aus unverschlüsselten TETRA-Sprachkanälen gibt es zusätzlich
-ein WSL-Backend. Es baut ein gepatchtes `tetra-rx`, lädt den ETSI-TETRA-Codec
-und installiert `cdecoder`/`sdecoder` lokal unter `tools/tetra-codec`, ohne
-dauerhaft Audiodateien zu schreiben:
+ein WSL-Backend. Der Offline-Installer bringt das Backend vollständig mit:
+gepatchtes `tetra-rx`, `cdecoder`, `sdecoder`, `tetra-audio-backend` und die
+benötigten Linux-Bibliotheken. Ein nachträglicher ETSI-Codec-Download oder
+die Installation von WSL-Buildpaketen ist dafür nicht nötig. Das Skript bleibt
+nur zum erneuten Bauen der Backend-Payload erhalten:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ensure_tetra_audio_backend.ps1

@@ -119,6 +119,16 @@ baue_codec() {
     install -m 0755 "${QUELLORDNER}/c-code/sdecoder" "${CODEC_TOOL_DIR}/sdecoder"
 }
 
+baue_live_backend() {
+    local quelle="${PROJECT_ROOT}/scripts/tetra_audio_backend_wsl.c"
+    local ziel="${CODEC_TOOL_DIR}/tetra-audio-backend"
+    [[ -f "${quelle}" ]] || die "tetra_audio_backend_wsl.c fehlt."
+    log "Baue TETRA-Audio-Live-Backend..."
+    mkdir -p "${CODEC_TOOL_DIR}"
+    gcc -O2 -Wall -Wextra "${quelle}" -o "${ziel}"
+    chmod 0755 "${ziel}"
+}
+
 baue_osmocom() {
     log "Baue TETRA-Decoder mit Audio-Burst-Ausgang..."
     bash "${PROJECT_ROOT}/scripts/ensure_osmocom_tetra.sh"
@@ -127,6 +137,7 @@ baue_osmocom() {
 pruefe_backend() {
     [[ -x "${CODEC_TOOL_DIR}/cdecoder" ]] || die "cdecoder wurde nicht gebaut."
     [[ -x "${CODEC_TOOL_DIR}/sdecoder" ]] || die "sdecoder wurde nicht gebaut."
+    [[ -x "${CODEC_TOOL_DIR}/tetra-audio-backend" ]] || die "tetra-audio-backend wurde nicht gebaut."
     [[ -x "${PROJECT_ROOT}/tools/osmocom-tetra/bin/tetra-rx" ]] || die "tetra-rx wurde nicht gebaut."
     log "Fertig. Codec: ${CODEC_TOOL_DIR}, Decoder: ${PROJECT_ROOT}/tools/osmocom-tetra/bin"
 }
@@ -141,6 +152,9 @@ if [[ ! -x "${CODEC_TOOL_DIR}/cdecoder" || ! -x "${CODEC_TOOL_DIR}/sdecoder" ]];
     baue_codec
 else
     log "Codec-Werkzeuge sind bereits gebaut."
+fi
+if [[ ! -x "${CODEC_TOOL_DIR}/tetra-audio-backend" || "${PROJECT_ROOT}/scripts/tetra_audio_backend_wsl.c" -nt "${CODEC_TOOL_DIR}/tetra-audio-backend" ]]; then
+    baue_live_backend
 fi
 pruefe_backend
 

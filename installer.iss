@@ -58,6 +58,9 @@ Source: "install.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "scripts\*"; DestDir: "{app}\scripts"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "patches\*"; DestDir: "{app}\patches"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "third_party\osmo-tetra\*"; DestDir: "{app}\third_party\osmo-tetra"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+Source: "installer_payload\wsl-audio-backend\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "installer_payload\wsl-audio-backend\README.txt"; DestDir: "{app}\licenses\wsl-audio-backend"; Flags: ignoreversion
+Source: "installer_payload\wsl-audio-backend\licenses\*"; DestDir: "{app}\licenses\wsl-audio-backend"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "installer_payload\rtl-sdr\x64\*"; DestDir: "{commonappdata}\tetra-decode\rtl-sdr\x64"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "installer_payload\osmocom-tetra\*"; DestDir: "{commonappdata}\tetra-decode\osmocom-tetra"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "installer_payload\zadig\zadig.exe"; DestDir: "{commonappdata}\tetra-decode\zadig"; Flags: ignoreversion

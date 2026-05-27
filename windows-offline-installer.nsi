@@ -71,6 +71,13 @@ Section "Programmdateien" SEC_APP
   SetOutPath "$INSTDIR\third_party\osmo-tetra"
   File /r /x ".git" "third_party\osmo-tetra\*"
 
+  SetOutPath "$INSTDIR\tools"
+  File /r "installer_payload\wsl-audio-backend\tools\*"
+
+  SetOutPath "$INSTDIR\licenses\wsl-audio-backend"
+  File "installer_payload\wsl-audio-backend\README.txt"
+  File /r "installer_payload\wsl-audio-backend\licenses\*"
+
   SetOutPath "$R9\tetra-decode\rtl-sdr\x64"
   File /r "installer_payload\rtl-sdr\x64\*"
 
@@ -123,6 +130,8 @@ Section "Uninstall"
   RMDir "$SMPROGRAMS\${APPNAME}"
 
   Delete "$INSTDIR\uninstall.exe"
+  RMDir /r "$INSTDIR\licenses"
+  RMDir /r "$INSTDIR\tools"
   RMDir /r "$INSTDIR"
 
   ${If} $R9 != ""

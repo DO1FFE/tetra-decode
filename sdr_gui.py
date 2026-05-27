@@ -404,14 +404,28 @@ def _wsl_tetra_audio_backend_paths():
     if not (sys.platform.startswith("win") and shutil.which("wsl.exe")):
         return None
     paths = {
-        "backend": _wsl_resource_path("scripts", "tetra_audio_backend_wsl.py"),
+        "backend": _wsl_resource_path("tools", "tetra-codec", "bin", "tetra-audio-backend"),
+        "backend_py": _wsl_resource_path("scripts", "tetra_audio_backend_wsl.py"),
         "tetra_rx": _wsl_resource_path("tools", "osmocom-tetra", "bin", "tetra-rx"),
+        "lib": _wsl_resource_path("tools", "osmocom-tetra", "lib"),
         "cdecoder": _wsl_resource_path("tools", "tetra-codec", "bin", "cdecoder"),
         "sdecoder": _wsl_resource_path("tools", "tetra-codec", "bin", "sdecoder"),
     }
-    if all(paths.values()):
+    if (
+        paths["tetra_rx"]
+        and paths["cdecoder"]
+        and paths["sdecoder"]
+        and (paths["backend"] or paths["backend_py"])
+    ):
         return paths
     return None
+
+
+def _wsl_audio_ld_export(paths):
+    lib_path = paths.get("lib") if paths else None
+    if not lib_path:
+        return ""
+    return f"export LD_LIBRARY_PATH={shlex.quote(lib_path)}:${{LD_LIBRARY_PATH:-}}; "
 
 
 def _wsl_tetra_audio_backend_available():
@@ -422,12 +436,20 @@ def _wsl_tetra_audio_backend_available():
     if not paths:
         _WSL_AUDIO_BACKEND_CACHE = False
         return False
+    backend_check = (
+        f"test -x {shlex.quote(paths['backend'])}"
+        if paths.get("backend")
+        else (
+            "command -v python3 >/dev/null && "
+            f"test -f {shlex.quote(paths['backend_py'])}"
+        )
+    )
     check_cmd = (
-        "command -v python3 >/dev/null && "
+        _wsl_audio_ld_export(paths) +
         f"test -x {shlex.quote(paths['tetra_rx'])} && "
         f"test -x {shlex.quote(paths['cdecoder'])} && "
         f"test -x {shlex.quote(paths['sdecoder'])} && "
-        f"test -f {shlex.quote(paths['backend'])}"
+        f"{backend_check}"
     )
     try:
         result = subprocess.run(
@@ -3170,12 +3192,13 @@ class TetraAudioBackend:
             "TETRA_AUDIO_UDP_HOST=127.0.0.1",
             "TETRA_AUDIO_RXID=1",
         ])
+        ld_export = _wsl_audio_ld_export(paths)
         return [
             "wsl.exe",
             "--",
             "bash",
             "-lc",
-            f"export {exports}; exec {shlex.quote(paths['tetra_rx'])} /dev/stdin",
+            f"{ld_export}export {exports}; exec {shlex.quote(paths['tetra_rx'])} /dev/stdin",
         ]
 
     def start(self):
@@ -3183,8 +3206,13 @@ class TetraAudioBackend:
         if not paths:
             self.output_callback("Audioausgabe: TETRA-Audio-Backend fehlt.")
             return False
+        backend = paths.get("backend")
+        if backend:
+            backend_cmd = f"exec {shlex.quote(backend)}"
+        else:
+            backend_cmd = f"exec python3 {shlex.quote(paths['backend_py'])}"
         cmd = (
-            f"exec python3 {shlex.quote(paths['backend'])} "
+            f"{_wsl_audio_ld_export(paths)}{backend_cmd} "
             f"--udp-host 127.0.0.1 --udp-port {int(self.port)} "
             f"--cdecoder {shlex.quote(paths['cdecoder'])} "
             f"--sdecoder {shlex.quote(paths['sdecoder'])}"

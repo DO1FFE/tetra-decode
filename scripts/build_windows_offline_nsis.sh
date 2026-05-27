@@ -22,6 +22,11 @@ command -v makensis >/dev/null 2>&1 || die "makensis fehlt. Installiere NSIS, z.
 [[ -f installer_payload/osmocom-tetra/tetra-rx.exe ]] || die "osmocom-tetra-Payload fehlt."
 [[ -f installer_payload/rtl-sdr/x64/rtl_sdr.exe ]] || die "RTL-SDR-Payload fehlt."
 [[ -f installer_payload/zadig/zadig.exe ]] || die "Zadig-Payload fehlt."
+[[ -f installer_payload/wsl-audio-backend/tools/osmocom-tetra/bin/tetra-rx ]] || die "WSL-Audio-Backend tetra-rx fehlt."
+[[ -f installer_payload/wsl-audio-backend/tools/osmocom-tetra/lib/libosmocore.so.16 ]] || die "WSL-Audio-Backend libosmocore fehlt."
+[[ -f installer_payload/wsl-audio-backend/tools/tetra-codec/bin/tetra-audio-backend ]] || die "WSL-Audio-Backend-Programm fehlt."
+[[ -f installer_payload/wsl-audio-backend/tools/tetra-codec/bin/cdecoder ]] || die "WSL-Audio-Backend cdecoder fehlt."
+[[ -f installer_payload/wsl-audio-backend/tools/tetra-codec/bin/sdecoder ]] || die "WSL-Audio-Backend sdecoder fehlt."
 find installer_payload/gnuradio -maxdepth 1 -name 'radioconda-*-Windows-x86_64.exe' -print -quit | grep -q . || \
     die "Radioconda/GNU-Radio-Payload fehlt. Baue zuerst mit scripts/build_windows_installer.ps1 oder lade den Payload nach installer_payload/gnuradio."
 
