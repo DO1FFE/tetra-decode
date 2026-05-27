@@ -18,7 +18,6 @@ import pkgutil
 import ctypes.util
 import shlex
 import glob
-import socket
 import faulthandler
 import traceback
 try:
@@ -3143,103 +3142,6 @@ class DecodedAudioPlayer(QtCore.QObject):
             return False
 
 
-class PcmAudioStreamClient(QtCore.QObject):
-    """Empfängt Live-PCM über TCP und reicht die Daten ohne Mitschnitt weiter."""
-
-    audio = QtCore.pyqtSignal(bytes)
-    status = QtCore.pyqtSignal(str)
-    level = QtCore.pyqtSignal(float)
-    stopped = QtCore.pyqtSignal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._thread = None
-        self._running = threading.Event()
-        self._socket = None
-        self._socket_lock = threading.RLock()
-
-    def is_running(self):
-        return self._thread is not None and self._thread.is_alive()
-
-    def start(self, host: str, port: int):
-        if self.is_running():
-            return
-        host = (host or "127.0.0.1").strip()
-        port = int(port)
-        self._running.set()
-        self._thread = threading.Thread(
-            target=self._run,
-            args=(host, port),
-            daemon=True,
-        )
-        self._thread.start()
-
-    def stop(self):
-        self._running.clear()
-        with self._socket_lock:
-            sock = self._socket
-            self._socket = None
-        if sock:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            try:
-                sock.close()
-            except OSError:
-                pass
-        if (
-            self._thread
-            and self._thread.is_alive()
-            and threading.current_thread() is not self._thread
-        ):
-            self._thread.join(timeout=2)
-        if not self.is_running():
-            self._thread = None
-
-    def _run(self, host: str, port: int):
-        rest = b""
-        try:
-            self.status.emit(f"Stream verbindet zu {host}:{port}")
-            with socket.create_connection((host, port), timeout=4) as sock:
-                sock.settimeout(0.5)
-                with self._socket_lock:
-                    self._socket = sock
-                self.status.emit(f"Stream verbunden: {host}:{port}")
-                while self._running.is_set():
-                    try:
-                        chunk = sock.recv(4096)
-                    except socket.timeout:
-                        continue
-                    if not chunk:
-                        self.status.emit("Stream beendet")
-                        break
-                    data = rest + chunk
-                    if len(data) % 2:
-                        rest = data[-1:]
-                        data = data[:-1]
-                    else:
-                        rest = b""
-                    if not data:
-                        continue
-                    self.audio.emit(data)
-                    try:
-                        werte = np.frombuffer(data, dtype=np.int16).astype(np.int32)
-                        if werte.size:
-                            pegel = min(1.0, float(np.max(np.abs(werte))) / 32768.0)
-                            self.level.emit(pegel)
-                    except Exception:
-                        pass
-        except Exception as exc:
-            if self._running.is_set():
-                self.status.emit(f"Stream nicht verbunden: {exc}")
-        finally:
-            self._running.clear()
-            with self._socket_lock:
-                self._socket = None
-            self.stopped.emit()
-
-
 class TetraAudioBackend:
     """Startet die WSL-Codec-Kette und liefert PCM ohne dauerhafte Dateien."""
 
@@ -4065,8 +3967,6 @@ class MainWindow(QtWidgets.QMainWindow):
             "tetra_max_candidates": 0,
             "audio_mode": "safe",
             "record_audio": False,
-            "audio_stream_host": "127.0.0.1",
-            "audio_stream_port": 7355,
             "log_decoder_lines": False,
             "monitor_cycle_delay_sec": 5,
             "ui_profile_version": 3,
@@ -4132,9 +4032,6 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.decoder = TetraDecoder(ppm=self.config.get("ppm", 0), parent=self)
         self.dec_audio_player = DecodedAudioPlayer(parent=self)
-        self.stream_audio_player = DecodedAudioPlayer(parent=self)
-        self.audio_stream_client = PcmAudioStreamClient(parent=self)
-        self._stream_record_requested = False
         self._encrypted_notice_shown = False
 
         self.scheduler_timer = QtCore.QTimer(self)
@@ -4177,10 +4074,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.decoder.finished.connect(self._decoder_finished)
         self.decoder.audio.connect(self.dec_audio_player.process)
         self.decoder.encrypted.connect(self._encrypted_signal)
-        self.audio_stream_client.audio.connect(self.stream_audio_player.process)
-        self.audio_stream_client.status.connect(self._stream_status)
-        self.audio_stream_client.level.connect(self._stream_level)
-        self.audio_stream_client.stopped.connect(self._stream_stopped)
 
         self.tetra_start_btn.clicked.connect(self.start_decoding)
         self.tetra_stop_btn.clicked.connect(self.stop_decoding)
@@ -4204,14 +4097,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.play_audio_cb.toggled.connect(self._toggle_dec_audio)
         self.record_audio_cb.toggled.connect(
             lambda checked: self.config.__setitem__("record_audio", bool(checked))
-        )
-        self.audio_stream_start_btn.clicked.connect(self.start_audio_stream)
-        self.audio_stream_stop_btn.clicked.connect(self.stop_audio_stream)
-        self.audio_stream_host_edit.textChanged.connect(
-            lambda text: self.config.__setitem__("audio_stream_host", text.strip())
-        )
-        self.audio_stream_port_spin.valueChanged.connect(
-            lambda value: self.config.__setitem__("audio_stream_port", int(value))
         )
         self.log_decoder_lines_cb.toggled.connect(
             lambda checked: self.config.__setitem__("log_decoder_lines", bool(checked))
@@ -4539,8 +4424,7 @@ class MainWindow(QtWidgets.QMainWindow):
         audio_bar.addWidget(self.audio_mode_combo)
         self.play_audio_cb = QtWidgets.QCheckBox("Decoder-Audio")
         self.play_audio_cb.setToolTip(
-            "Aktiviert Audio aus einer audiofähigen Decoder-Kette. "
-            "Der Live-Stream wird separat gestartet."
+            "Aktiviert Audio aus der internen TETRA-Decoder-Kette."
         )
         self.play_audio_cb.setChecked(self.audio_mode_combo.currentData() != "off")
         audio_bar.addWidget(self.play_audio_cb)
@@ -4557,36 +4441,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.audio_status_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         audio_bar.addWidget(self.audio_status_label)
         audio_data_layout.addLayout(audio_bar)
-
-        stream_bar = QtWidgets.QHBoxLayout()
-        stream_bar.addWidget(QtWidgets.QLabel("Live-Stream:"))
-        self.audio_stream_host_edit = QtWidgets.QLineEdit(
-            str(self.config.get("audio_stream_host", "127.0.0.1"))
-        )
-        self.audio_stream_host_edit.setFixedWidth(130)
-        stream_bar.addWidget(self.audio_stream_host_edit)
-        self.audio_stream_port_spin = QtWidgets.QSpinBox()
-        self.audio_stream_port_spin.setRange(1, 65535)
-        self.audio_stream_port_spin.setValue(int(self.config.get("audio_stream_port", 7355)))
-        stream_bar.addWidget(self.audio_stream_port_spin)
-        self.audio_stream_start_btn = aktionsknopf(
-            "Stream starten",
-            QtWidgets.QStyle.SP_MediaPlay,
-            primaer=True,
-        )
-        self.audio_stream_stop_btn = aktionsknopf("Stream stoppen", QtWidgets.QStyle.SP_MediaStop)
-        self.audio_stream_stop_btn.setEnabled(False)
-        stream_bar.addWidget(self.audio_stream_start_btn)
-        stream_bar.addWidget(self.audio_stream_stop_btn)
-        self.audio_stream_status_label = QtWidgets.QLabel(
-            "PCM 16 Bit, mono, 8000 Hz, ohne Mitschnitt"
-        )
-        self.audio_stream_status_label.setObjectName("statusDetail")
-        self.audio_stream_status_label.setWordWrap(True)
-        self.audio_stream_status_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-        stream_bar.addWidget(self.audio_stream_status_label)
-        stream_bar.addStretch()
-        audio_data_layout.addLayout(stream_bar)
 
         self.decoder_data_table = QtWidgets.QTableWidget(0, 4)
         self.decoder_data_table.setHorizontalHeaderLabels(
@@ -5179,98 +5033,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if immer or folgen:
             tabelle.scrollToItem(item, QtWidgets.QAbstractItemView.EnsureVisible)
 
-    def _audio_stream_endpoint(self):
-        host = "127.0.0.1"
-        port = 7355
-        if hasattr(self, "audio_stream_host_edit"):
-            host = self.audio_stream_host_edit.text().strip() or host
-        else:
-            host = str(self.config.get("audio_stream_host", host)).strip() or host
-        if hasattr(self, "audio_stream_port_spin"):
-            port = int(self.audio_stream_port_spin.value())
-        else:
-            port = int(self.config.get("audio_stream_port", port))
-        return host, port
-
-    def start_audio_stream(self):
-        """Startet den Live-PCM-Eingang ohne automatische Dateiausgabe."""
-        host, port = self._audio_stream_endpoint()
-        self.config["audio_stream_host"] = host
-        self.config["audio_stream_port"] = int(port)
-        self._stream_record_requested = bool(self.record_audio_cb.isChecked())
-        self.stream_audio_player.stop()
-        self.audio_stream_start_btn.setEnabled(False)
-        self.audio_stream_stop_btn.setEnabled(True)
-        self.audio_stream_status_label.setText(f"Verbinde {host}:{port}")
-        self.audio_stream_status_label.setToolTip(f"Verbinde {host}:{port}")
-        self.audio_status_label.setText("Audio-Status: Stream verbindet")
-        self.audio_status_label.setToolTip(f"Verbinde {host}:{port}")
-        self.audio_stream_client.start(host, port)
-        self._refresh_dashboard_status()
-
-    def stop_audio_stream(self):
-        """Stoppt den Live-PCM-Eingang."""
-        lief = bool(
-            hasattr(self, "audio_stream_client")
-            and self.audio_stream_client.is_running()
-        )
-        if hasattr(self, "audio_stream_client"):
-            self.audio_stream_client.stop()
-        if hasattr(self, "stream_audio_player"):
-            self.stream_audio_player.stop()
-        if hasattr(self, "audio_stream_start_btn"):
-            self.audio_stream_start_btn.setEnabled(True)
-            self.audio_stream_stop_btn.setEnabled(False)
-        if lief and hasattr(self, "audio_stream_status_label"):
-            self.audio_stream_status_label.setText("Stream gestoppt")
-        if lief and hasattr(self, "audio_status_label"):
-            self.audio_status_label.setText("Audio-Status: Stream gestoppt")
-        self._refresh_dashboard_status()
-
-    @QtCore.pyqtSlot(str)
-    def _stream_status(self, text: str):
-        kurz, detail = self._format_stream_status(text)
-        if text.startswith("Stream verbunden"):
-            if not self.stream_audio_player.start(record=self._stream_record_requested):
-                kurz = "Audiogerät nicht verfügbar"
-                detail = "Der Stream ist verbunden, aber der Audioausgang konnte nicht geöffnet werden."
-        if hasattr(self, "audio_stream_status_label"):
-            self.audio_stream_status_label.setText(kurz)
-            self.audio_stream_status_label.setToolTip(detail)
-        if hasattr(self, "audio_status_label"):
-            self.audio_status_label.setText(f"Audio-Status: {kurz}")
-            self.audio_status_label.setToolTip(detail)
-        self._refresh_dashboard_status()
-
-    def _format_stream_status(self, text: str):
-        host, port = self._audio_stream_endpoint()
-        detail = text
-        lower = text.lower()
-        if "nicht verbunden" in lower:
-            if "10061" in text or "connection refused" in lower or "verweigert" in lower:
-                return f"Kein Audio-Backend auf {host}:{port}", detail
-            return f"Stream nicht verbunden ({host}:{port})", detail
-        if text.startswith("Stream verbunden"):
-            return f"Stream verbunden ({host}:{port})", detail
-        if text.startswith("Stream verbindet"):
-            return f"Stream verbindet ({host}:{port})", detail
-        if text.startswith("Stream beendet"):
-            return "Stream beendet", detail
-        return text, detail
-
-    @QtCore.pyqtSlot(float)
-    def _stream_level(self, level: float):
-        if level > 0.05:
-            self.activity_led.set_color("yellow")
-            QtCore.QTimer.singleShot(300, lambda: self.activity_led.set_color("green"))
-
-    @QtCore.pyqtSlot()
-    def _stream_stopped(self):
-        self.stream_audio_player.stop()
-        self.audio_stream_start_btn.setEnabled(True)
-        self.audio_stream_stop_btn.setEnabled(False)
-        self._refresh_dashboard_status()
-
     def _refresh_dashboard_status(self):
         if not hasattr(self, "dashboard_device_value"):
             return
@@ -5320,11 +5082,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         status = self.audio_status_label.text().replace("Audio-Status:", "").strip()
         self.dashboard_audio_value.setText(status or "wartet")
-        if hasattr(self, "audio_stream_client") and self.audio_stream_client.is_running():
-            host, port = self._audio_stream_endpoint()
-            self.dashboard_audio_detail.setText(f"Stream {host}:{port}")
-        else:
-            self.dashboard_audio_detail.setText(f"Modus: {self._audio_mode_text()}")
+        self.dashboard_audio_detail.setText(f"Modus: {self._audio_mode_text()}")
 
         talkgroups = getattr(self, "talkgroups", {})
         selected_talkgroups = getattr(self, "selected_talkgroups", set())
@@ -6131,7 +5889,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scanner.stop()
         self.player.stop()
         self.stop_decoding()
-        self.stop_audio_stream()
         self._refresh_dashboard_status()
 
     def closeEvent(self, event):
@@ -6153,9 +5910,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.config["calibrate_on_start"] = bool(self.calibrate_on_start_cb.isChecked())
         self.config["audio_mode"] = self._audio_mode()
         self.config["record_audio"] = bool(self.record_audio_cb.isChecked())
-        host, port = self._audio_stream_endpoint()
-        self.config["audio_stream_host"] = host
-        self.config["audio_stream_port"] = int(port)
         self.config["log_decoder_lines"] = bool(self.log_decoder_lines_cb.isChecked())
         self.config["ui_profile_version"] = 3
         self.config["tetra_probe_all_candidates"] = bool(
