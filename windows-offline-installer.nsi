@@ -85,6 +85,7 @@ Section "TETRA Decode installieren" SEC01
   CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$INSTDIR\${APPEXE}"
   CreateShortCut "$SMPROGRAMS\${APPNAME}\Zadig (RTL-SDR Treiber).lnk" "$R9\tetra-decode\zadig\zadig.exe"
   CreateShortCut "$SMPROGRAMS\${APPNAME}\Deinstallieren.lnk" "$INSTDIR\uninstall.exe"
+  CreateShortCut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\${APPEXE}"
 
   DetailPrint "Richte gebündelte Laufzeitkomponenten ein..."
   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\windows_postinstall.ps1" -InstallGnuRadio -RequireBundledGnuRadio' $0
@@ -102,6 +103,7 @@ Section "Deinstallieren"
   Delete "$SMPROGRAMS\${APPNAME}\Zadig (RTL-SDR Treiber).lnk"
   Delete "$SMPROGRAMS\${APPNAME}\Deinstallieren.lnk"
   RMDir "$SMPROGRAMS\${APPNAME}"
+  Delete "$DESKTOP\${APPNAME}.lnk"
 
   Delete "$INSTDIR\uninstall.exe"
   RMDir /r "$INSTDIR"

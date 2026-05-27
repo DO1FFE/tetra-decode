@@ -42,9 +42,6 @@ VersionInfoCopyright=© 2026 Erik Schauer, do1ffe@darc.de
 [Languages]
 Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 
-[Tasks]
-Name: "desktopicon"; Description: "Desktop-Verknüpfung erstellen"; GroupDescription: "Zusätzliche Symbole:"; Flags: unchecked
-
 [Files]
 Source: "{#AppExeSource}"; DestDir: "{app}"; DestName: "{#AppExeName}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -60,7 +57,7 @@ Source: "installer_payload\gnuradio\*"; DestDir: "{commonappdata}\tetra-decode\g
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"
 Name: "{autoprograms}\Zadig (RTL-SDR Treiber)"; Filename: "{commonappdata}\tetra-decode\zadig\zadig.exe"
 
 [Registry]
