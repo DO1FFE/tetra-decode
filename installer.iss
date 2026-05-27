@@ -9,7 +9,11 @@
 #ifexist "dist\tetra-decode.exe"
 #define AppExeSource "dist\tetra-decode.exe"
 #else
+#ifexist "dist\sdr_gui.exe"
+#define AppExeSource "dist\sdr_gui.exe"
+#else
 #define AppExeSource "tetra-decode.exe"
+#endif
 #endif
 
 [Setup]
