@@ -179,7 +179,10 @@ _WSL_OSMO_CACHE = None
 
 _RTL_U8_TO_COMPLEX64_SCRIPT = r"""
 import sys
+import os
 import numpy as np
+
+mode = os.environ.get("TETRA_IQ_MODE", "normal").strip().lower()
 
 while True:
     chunk = sys.stdin.buffer.read(262144)
@@ -191,7 +194,16 @@ while True:
         continue
     iq = np.frombuffer(chunk, dtype=np.uint8).astype(np.float32)
     iq = (iq - 127.5) / 128.0
-    complex_iq = iq[0::2] + 1j * iq[1::2]
+    i_samples = iq[0::2]
+    q_samples = iq[1::2]
+    if mode == "conjugate":
+        complex_iq = i_samples - 1j * q_samples
+    elif mode == "swap":
+        complex_iq = q_samples + 1j * i_samples
+    elif mode == "swap_conjugate":
+        complex_iq = q_samples - 1j * i_samples
+    else:
+        complex_iq = i_samples + 1j * q_samples
     sys.stdout.buffer.write(complex_iq.astype(np.complex64).tobytes())
     sys.stdout.buffer.flush()
 """
@@ -2063,7 +2075,7 @@ class TetraSignalSearchWorker(QtCore.QThread):
                     f"Prüfe Kandidat {index}/{len(ordered)}: "
                     f"{frequency/1e6:.4f} MHz"
                 )
-                probe = self._probe_frequency(frequency)
+                probe = self._probe_frequency_sweep(frequency)
                 entry.update(probe)
                 self.candidate.emit(entry)
         finally:
@@ -2166,9 +2178,28 @@ class TetraSignalSearchWorker(QtCore.QThread):
             seen_freqs = {freq for freq, _power, _delta in raw}
             raw.extend(item for item in top if item[0] not in seen_freqs)
 
+        clusters = []
+        for freq, power, delta in sorted(raw, key=lambda item: item[0]):
+            if not clusters or freq - clusters[-1][-1][0] > 25_000:
+                clusters.append([])
+            clusters[-1].append((freq, power, delta))
+
+        clustered = []
+        for cluster in clusters:
+            weights = np.array(
+                [max(0.1, power - median) for _freq, power, _delta in cluster],
+                dtype=float,
+            )
+            freqs = np.array([freq for freq, _power, _delta in cluster], dtype=float)
+            center = float(np.average(freqs, weights=weights))
+            center = round(center / TETRA_CHANNEL_RASTER_HZ) * TETRA_CHANNEL_RASTER_HZ
+            best_power = max(power for _freq, power, _delta in cluster)
+            best_delta = max(delta for _freq, _power, delta in cluster)
+            clustered.append((center, best_power, best_delta))
+
         selected = []
-        for freq, power, delta in sorted(raw, key=lambda item: item[1], reverse=True):
-            if any(abs(freq - item["frequency_hz"]) < 25_000 for item in selected):
+        for freq, power, delta in sorted(clustered, key=lambda item: item[1], reverse=True):
+            if any(abs(freq - item["frequency_hz"]) < 37_500 for item in selected):
                 continue
             selected.append({
                 "frequency_hz": float(freq),
@@ -2188,21 +2219,76 @@ class TetraSignalSearchWorker(QtCore.QThread):
             and shutil.which("tetra-rx")
         )
 
-    def _rtl_sdr_probe_cmd(self, frequency: float):
+    def _rtl_sdr_probe_cmd(self, frequency: float, seconds: float | None = None):
+        probe_seconds = max(1.0, float(seconds if seconds is not None else self.probe_seconds))
         cmd = [
             "rtl_sdr",
             "-p", str(self.ppm),
             "-g", str(_resolve_gain_value(self.gain)),
             "-f", str(int(frequency)),
             "-s", "2000000",
-            "-n", str(int(2_000_000 * max(1, self.probe_seconds))),
+            "-n", str(int(2_000_000 * probe_seconds)),
         ]
         if self.device_id is not None:
             cmd.extend(["-d", str(self.device_id)])
         cmd.append("-")
         return cmd
 
-    def _probe_frequency(self, frequency: float):
+    def _probe_frequency_sweep(self, frequency: float):
+        quick_seconds = max(3.0, min(float(self.probe_seconds), 4.0))
+        attempts = [
+            (frequency, "normal", quick_seconds),
+            (frequency - 12_500, "normal", quick_seconds),
+            (frequency + 12_500, "normal", quick_seconds),
+            (frequency, "conjugate", quick_seconds),
+        ]
+        best = None
+        attempt_texts = []
+        for probe_frequency, iq_mode, seconds in attempts:
+            if not self._running.is_set():
+                break
+            result = self._probe_frequency(
+                probe_frequency,
+                iq_mode=iq_mode,
+                probe_seconds=seconds,
+            )
+            attempt_texts.append(
+                f"{probe_frequency/1e6:.4f} MHz/{iq_mode}: {result.get('status')}"
+            )
+            result["probe_frequency_hz"] = probe_frequency
+            result["iq_mode"] = iq_mode
+            if result.get("confirmed"):
+                result["details"] = (
+                    f"{result.get('details', '')}; Prüfmitte "
+                    f"{probe_frequency/1e6:.4f} MHz, IQ {iq_mode}"
+                )
+                return result
+            if result.get("status") in ("Fehler", "nicht geprüft", "abgebrochen"):
+                return result
+            if best is None or result.get("bits_size", 0) > best.get("bits_size", 0):
+                best = result
+
+        if best is None:
+            return {
+                "status": "abgebrochen",
+                "details": "Signalsuche wurde gestoppt",
+                "audio": "-",
+                "lines": [],
+                "bits_size": 0,
+            }
+        best = dict(best)
+        best["details"] = (
+            f"{best.get('details', 'keine gültigen TETRA-Bursts')}; "
+            "geprüft: " + " | ".join(attempt_texts)
+        )
+        return best
+
+    def _probe_frequency(
+        self,
+        frequency: float,
+        iq_mode: str = "normal",
+        probe_seconds: float | None = None,
+    ):
         if not self._windows_native_probe_available():
             return {
                 "status": "nicht geprüft",
@@ -2223,8 +2309,10 @@ class TetraSignalSearchWorker(QtCore.QThread):
             tmp.close()
 
             with open(bits_path, "wb") as bits_out:
+                conv_env = _gnuradio_env_for(gnuradio_python)
+                conv_env["TETRA_IQ_MODE"] = iq_mode
                 p1 = subprocess.Popen(
-                    self._rtl_sdr_probe_cmd(frequency),
+                    self._rtl_sdr_probe_cmd(frequency, seconds=probe_seconds),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
                     **_hidden_subprocess_kwargs(),
@@ -2235,7 +2323,7 @@ class TetraSignalSearchWorker(QtCore.QThread):
                     stdin=p1.stdout,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
-                    env=_gnuradio_env_for(gnuradio_python),
+                    env=conv_env,
                     **_hidden_subprocess_kwargs(),
                 )
                 self._add_proc(pconv)
@@ -2253,7 +2341,8 @@ class TetraSignalSearchWorker(QtCore.QThread):
                 if pconv.stdout:
                     pconv.stdout.close()
 
-                deadline = time.time() + max(5, self.probe_seconds + 5)
+                active_seconds = max(1.0, float(probe_seconds or self.probe_seconds))
+                deadline = time.time() + max(5, active_seconds + 5)
                 while self._running.is_set() and time.time() < deadline:
                     if p2.poll() is not None:
                         break
@@ -2270,6 +2359,18 @@ class TetraSignalSearchWorker(QtCore.QThread):
                 }
 
             bits_size = os.path.getsize(bits_path)
+            if bits_size == 0:
+                return {
+                    "confirmed": False,
+                    "status": "Fehler",
+                    "details": (
+                        "keine IQ-/Demodulationsdaten; RTL-SDR vermutlich belegt "
+                        "oder Treiberzugriff blockiert"
+                    ),
+                    "audio": "-",
+                    "lines": [],
+                    "bits_size": bits_size,
+                }
             if bits_size >= 4096:
                 p3 = subprocess.Popen(
                     ["tetra-rx", bits_path],
