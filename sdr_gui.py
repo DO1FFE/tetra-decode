@@ -485,6 +485,7 @@ TETRA_DEFAULT_RANGES = [
     ("440-443 MHz (Bündelfunk Unterband)", 440e6, 443e6),
     ("445-448 MHz (Bündelfunk Oberband/Basis)", 445e6, 448e6),
 ]
+TETRA_ALL_RANGES_LABEL = "Alle Bereiche"
 TETRA_SCAN_BIN_HZ = 12_500
 TETRA_CHANNEL_RASTER_HZ = 12_500
 
@@ -649,6 +650,31 @@ def _decoder_line_type(line: str):
     if "Keine gültigen TETRA-Bursts" in line or "Zu wenige Demodulationsbits" in line:
         return "Status"
     return "Rohdaten"
+
+
+def _decoder_line_for_ui(line: str) -> bool:
+    text = line.strip()
+    if not text:
+        return False
+    if text.startswith("Audioausgabe:"):
+        return True
+    if text.startswith(("Keine ", "Zu wenige ", "Windows-TETRA-", "Nutze ")):
+        return True
+    if "BNCH SYSINFO" in text or "SYSINFO PDU" in text:
+        return True
+    if "ACCESS-ASSIGN PDU" in text and "Traffic" in text:
+        return True
+    if "RESOURCE" in text and "Addr=Null" not in text:
+        return True
+    if re.search(
+        r"\b(?:D-|U-|SDS|LOCATION|AUTHENTICATION|ATTACH|DETACH|CALL|CONNECT|DISCONNECT)\b",
+        text,
+        re.I,
+    ):
+        return True
+    if extract_talkgroup_ids(text):
+        return True
+    return False
 
 
 def _extract_sysinfo(line: str):
@@ -3579,6 +3605,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.canvas = SpectrumCanvas()
         self.log = QtWidgets.QPlainTextEdit()
         self.log.setReadOnly(True)
+        self.log.setLineWrapMode(QtWidgets.QPlainTextEdit.WidgetWidth)
+        self.log.setWordWrapMode(QtGui.QTextOption.WrapAtWordBoundaryOrAnywhere)
         self.freq_list = QtWidgets.QListWidget()
 
         self.activity_led = LEDIndicator()
@@ -3587,8 +3615,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_devices()
 
         self.freq_range_box = QtWidgets.QComboBox()
+        self.freq_range_box.addItem(TETRA_ALL_RANGES_LABEL, None)
         for label, start_hz, end_hz in TETRA_DEFAULT_RANGES:
             self.freq_range_box.addItem(label, (start_hz, end_hz))
+        self.freq_range_box.setMinimumContentsLength(28)
 
         self.agc_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.agc_slider.setRange(5000, 20000)
@@ -3686,6 +3716,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stream_audio_player = DecodedAudioPlayer(parent=self)
         self.audio_stream_client = PcmAudioStreamClient(parent=self)
         self._stream_record_requested = False
+        self._encrypted_notice_shown = False
 
         self.scheduler_timer = QtCore.QTimer(self)
         self.scheduler_timer.timeout.connect(self.run_scheduled_cycle)
@@ -3874,7 +3905,8 @@ class MainWindow(QtWidgets.QMainWindow):
             tabelle.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
             tabelle.verticalHeader().setVisible(False)
             tabelle.setShowGrid(False)
-            tabelle.setWordWrap(False)
+            tabelle.setWordWrap(True)
+            tabelle.verticalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
             tabelle.horizontalHeader().setHighlightSections(False)
             if stretch_spalte is not None:
                 for spalte in range(tabelle.columnCount()):
@@ -4012,6 +4044,8 @@ class MainWindow(QtWidgets.QMainWindow):
         channel_layout.addLayout(kanal_toolbar)
 
         suchoptionen_layout = QtWidgets.QHBoxLayout()
+        suchoptionen_layout.addWidget(QtWidgets.QLabel("Bereich:"))
+        suchoptionen_layout.addWidget(self.freq_range_box, 1)
         self.probe_all_candidates_cb = QtWidgets.QCheckBox("Alle gefundenen Kandidaten prüfen")
         self.probe_all_candidates_cb.setChecked(
             bool(self.config.get("tetra_probe_all_candidates", True))
@@ -4040,6 +4074,8 @@ class MainWindow(QtWidgets.QMainWindow):
         channel_layout.addWidget(self.filter_edit)
         self.tetra_output = QtWidgets.QPlainTextEdit()
         self.tetra_output.setReadOnly(True)
+        self.tetra_output.setLineWrapMode(QtWidgets.QPlainTextEdit.WidgetWidth)
+        self.tetra_output.setWordWrapMode(QtGui.QTextOption.WrapAtWordBoundaryOrAnywhere)
         self.tetra_output.setMaximumBlockCount(2000)
         channel_layout.addWidget(self.tetra_output, 1)
 
@@ -4095,6 +4131,8 @@ class MainWindow(QtWidgets.QMainWindow):
         audio_bar.addStretch()
         self.audio_status_label = QtWidgets.QLabel("Audio-Status: wartet")
         self.audio_status_label.setObjectName("audioStatus")
+        self.audio_status_label.setWordWrap(True)
+        self.audio_status_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         audio_bar.addWidget(self.audio_status_label)
         audio_data_layout.addLayout(audio_bar)
 
@@ -4122,6 +4160,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "PCM 16 Bit, mono, 8000 Hz, ohne Mitschnitt"
         )
         self.audio_stream_status_label.setObjectName("statusDetail")
+        self.audio_stream_status_label.setWordWrap(True)
         self.audio_stream_status_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         stream_bar.addWidget(self.audio_stream_status_label)
         stream_bar.addStretch()
@@ -4193,7 +4232,6 @@ class MainWindow(QtWidgets.QMainWindow):
         refresh.clicked.connect(self.refresh_devices)
         dev_layout.addWidget(refresh)
         f_links.addRow("Gerät:", dev_layout)
-        f_links.addRow("Frequenzbereich:", self.freq_range_box)
         self.ppm_spin = QtWidgets.QSpinBox()
         self.ppm_spin.setRange(-100, 100)
         self.ppm_spin.setValue(self.config.get("ppm", 0))
@@ -4229,6 +4267,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.calibration_status_label = QtWidgets.QLabel(
             "Referenz: WDR 2 Essen 99,200 MHz"
         )
+        self.calibration_status_label.setWordWrap(True)
+        self.calibration_status_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         start_cal_layout = QtWidgets.QHBoxLayout()
         start_cal_layout.addWidget(self.calibrate_on_start_cb)
         start_cal_layout.addWidget(self.calibration_status_label)
@@ -4649,6 +4689,32 @@ class MainWindow(QtWidgets.QMainWindow):
         if folgen:
             leiste.setValue(leiste.maximum())
 
+    def _ausgewaehlte_tetra_bereiche(self):
+        daten = self.freq_range_box.currentData()
+        if isinstance(daten, (tuple, list)) and len(daten) == 2:
+            return [(self.freq_range_box.currentText(), float(daten[0]), float(daten[1]))]
+        return list(TETRA_DEFAULT_RANGES)
+
+    def _bereichs_text(self):
+        bereiche = self._ausgewaehlte_tetra_bereiche()
+        if len(bereiche) == 1:
+            return bereiche[0][0]
+        return TETRA_ALL_RANGES_LABEL
+
+    def _tabellentext(self, text, limit: int = 180):
+        text = str(text)
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 3)].rstrip() + "..."
+
+    def _tabellen_item(self, text, limit: int | None = None):
+        volltext = str(text)
+        anzeige = self._tabellentext(volltext, limit) if limit else volltext
+        item = SortierbarerTabellenEintrag(anzeige)
+        if anzeige != volltext:
+            item.setToolTip(volltext)
+        return item
+
     def _frequenzzeile(self, tabelle, freq: float):
         key = int(round(freq))
         for row in range(tabelle.rowCount()):
@@ -4816,7 +4882,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             scan_text = "gestoppt"
         self.dashboard_scan_value.setText(scan_text)
-        self.dashboard_scan_detail.setText(self.freq_range_box.currentText())
+        self.dashboard_scan_detail.setText(self._bereichs_text())
 
         bestaetigt = 0
         if hasattr(self, "overview_channel_table"):
@@ -4877,7 +4943,7 @@ class MainWindow(QtWidgets.QMainWindow):
             farbe = QtGui.QColor("#f8d7da")
         self.overview_channel_table.setSortingEnabled(False)
         for spalte, wert in enumerate(werte):
-            item = SortierbarerTabellenEintrag(wert)
+            item = self._tabellen_item(wert, limit=90)
             if spalte == 0:
                 item.setData(QtCore.Qt.UserRole, freq)
             elif spalte == 2:
@@ -5225,6 +5291,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tetra_start_btn.setEnabled(False)
         self.tetra_stop_btn.setEnabled(True)
         self.tetra_output.clear()
+        self._encrypted_notice_shown = False
         rec = self.record_audio_cb.isChecked()
         audio_mode = self._audio_mode()
         audio_requested = audio_mode != "off" and self.play_audio_cb.isChecked()
@@ -5280,14 +5347,8 @@ class MainWindow(QtWidgets.QMainWindow):
         gain_setting = _normalize_gain_setting(self.config.get("gain", "max"))
         self.config["gain"] = gain_setting
 
-        ranges = []
-        for index in range(self.freq_range_box.count()):
-            data = self.freq_range_box.itemData(index)
-            if not data:
-                continue
-            ranges.append((self.freq_range_box.itemText(index), data[0], data[1]))
-        if not ranges:
-            ranges = TETRA_DEFAULT_RANGES
+        ranges = self._ausgewaehlte_tetra_bereiche()
+        range_text = self._bereichs_text()
 
         if self.probe_all_candidates_cb.isChecked():
             max_candidates = None
@@ -5302,7 +5363,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._append_plain_text(
             self.log,
             f"TETRA-Signalsuche gestartet mit Gerät {name}, PPM {self.ppm_spin.value()}, "
-            f"Gain {_resolve_gain_value(gain_setting):.1f} dB, {limit_text}."
+            f"Gain {_resolve_gain_value(gain_setting):.1f} dB, Bereich {range_text}, "
+            f"{limit_text}."
         )
         self._append_plain_text(self.tetra_output, "TETRA-Signalsuche gestartet.")
 
@@ -5329,7 +5391,15 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         worker.stop()
         if wait:
-            worker.wait(2000)
+            if not worker.wait(12000):
+                text = "TETRA-Signalsuche reagierte nicht rechtzeitig und wird hart beendet."
+                logger.warning(text)
+                try:
+                    self._append_plain_text(self.log, text)
+                except RuntimeError:
+                    pass
+                worker.terminate()
+                worker.wait(3000)
         self._set_signal_search_buttons(False)
 
     def _set_signal_search_buttons(self, running: bool):
@@ -5369,7 +5439,8 @@ class MainWindow(QtWidgets.QMainWindow):
         ]
         self.signal_search_table.setSortingEnabled(False)
         for column, value in enumerate(values):
-            item = SortierbarerTabellenEintrag(value)
+            limit = 180 if column == 3 else 80
+            item = self._tabellen_item(value, limit=limit)
             if column == 0:
                 item.setData(QtCore.Qt.UserRole, freq)
             elif column == 1:
@@ -5492,8 +5563,17 @@ class MainWindow(QtWidgets.QMainWindow):
     def _encrypted_signal(self):
         self.dec_audio_player.stop()
         self.audio_status_label.setText("Audio-Status: Signal verschlüsselt")
+        self.audio_status_label.setToolTip(
+            "Der Kanal signalisiert Luftschnittstellen-Verschlüsselung; "
+            "Audio wird deshalb nicht ausgegeben."
+        )
+        if not self._encrypted_notice_shown:
+            self._encrypted_notice_shown = True
+            self._append_plain_text(
+                self.log,
+                "Verschlüsseltes TETRA-Signal erkannt; Audioausgabe bleibt aus.",
+            )
         self._refresh_dashboard_status()
-        QtWidgets.QMessageBox.information(self, "Info", "Verschl\u00fcsseltes Signal erkannt")
 
     def _append_tetra(self, line: str):
         if not self._line_matches_selected_talkgroup(line):
@@ -5505,10 +5585,14 @@ class MainWindow(QtWidgets.QMainWindow):
                     return
             except re.error:
                 pass
-        self._append_plain_text(self.tetra_output, line)
-        if bool(self.config.get("log_decoder_lines", False)):
+        vollstaendig = bool(self.config.get("log_decoder_lines", False))
+        sichtbar = vollstaendig or _decoder_line_for_ui(line)
+        if sichtbar:
+            self._append_plain_text(self.tetra_output, line)
+        if vollstaendig:
             logger.info(line)
-        self._append_decoder_data(line)
+        if sichtbar:
+            self._append_decoder_data(line)
         if line.startswith("Audioausgabe:"):
             self.audio_status_label.setText(f"Audio-Status: {line.split(':', 1)[1].strip()}")
             self._refresh_dashboard_status()
@@ -5539,24 +5623,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.decoder.gain = gain_setting
         self.decoder.device_id = device_id
         self._update_ppm(self.ppm_spin.value())
-        rng = self.freq_range_box.currentData()
-        f_start, f_end = rng if rng else (380e6, 430e6)
+        bereiche = self._ausgewaehlte_tetra_bereiche()
+        f_start = min(start for _label, start, _end in bereiche)
+        f_end = max(end for _label, _start, end in bereiche)
         if device_id is None:
             device_text = "ohne Index"
         else:
             device_text = f"Index {device_id}"
         self.log.appendPlainText(
             f"Scan gestartet mit Gerät {device_text} ({name}) "
-            f"({f_start/1e6:.0f}-{f_end/1e6:.0f} MHz)"
+            f"({self._bereichs_text()}, {f_start/1e6:.0f}-{f_end/1e6:.0f} MHz)"
         )
         self.scanner.start(f_start, f_end)
         self._refresh_dashboard_status()
 
-    def stop(self):
+    def stop(self, wait=False):
         self.log.appendPlainText("Stoppe")
         self.stop_monitoring()
-        self.stop_calibration(wait=True)
-        self.stop_tetra_signal_search(wait=True)
+        self.stop_calibration(wait=wait)
+        self.stop_tetra_signal_search(wait=wait)
         self.scanner.stop()
         self.player.stop()
         self.stop_decoding()
@@ -5565,7 +5650,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         self._closing = True
-        self.stop()
+        self.stop(wait=True)
         self._store_current_settings()
         self._persist_talkgroups_to_config()
         self._persist_selected_talkgroups_to_config()
@@ -5766,7 +5851,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.decoder_data_table.insertRow(row)
         werte = [zeit, freq_text, typ, line]
         for column, value in enumerate(werte):
-            item = QtWidgets.QTableWidgetItem(value)
+            item = self._tabellen_item(value, limit=220 if column == 3 else 80)
             if typ in ("CRC OK", "Netzinfo"):
                 item.setBackground(QtGui.QColor("#c8f7c5"))
             elif typ in ("Verschlüsselung", "Status"):
