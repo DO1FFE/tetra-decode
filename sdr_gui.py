@@ -506,12 +506,34 @@ def _terminate_process_list(procs):
                 pass
 
 
+def _tetra_line_indicates_encryption(line: str) -> bool:
+    encr = re.search(r"\bEncr=(\d+)\b", line, re.IGNORECASE)
+    if encr:
+        return int(encr.group(1)) > 0
+    air = re.search(r"\bAir encryption:\s*(\d+)\b", line, re.IGNORECASE)
+    if air:
+        return int(air.group(1)) > 0
+    return bool(re.search(r"\b(?:ENCRYPTED|CIPHER)\b", line, re.IGNORECASE))
+
+
+def _tetra_line_indicates_clear_audio(line: str) -> bool:
+    encr = re.search(r"\bEncr=(\d+)\b", line, re.IGNORECASE)
+    if encr:
+        return int(encr.group(1)) == 0
+    air = re.search(r"\bAir encryption:\s*(\d+)\b", line, re.IGNORECASE)
+    if air:
+        return int(air.group(1)) == 0
+    return False
+
+
 def _classify_tetra_lines(lines, bits_size=0):
     crc_ok = 0
     unit_ok = 0
     sysinfo = 0
     resource = 0
     encrypted = False
+    clear_audio = False
+    voice_service = False
     talkgroups = set()
 
     for line in lines:
@@ -523,8 +545,12 @@ def _classify_tetra_lines(lines, bits_size=0):
             sysinfo += 1
         if "RESOURCE" in line:
             resource += 1
-        if re.search(r"\b(?:Encr=|ENCRYPTED|CACH|LIP)\b", line, re.IGNORECASE):
+        if _tetra_line_indicates_encryption(line):
             encrypted = True
+        if _tetra_line_indicates_clear_audio(line):
+            clear_audio = True
+        if re.search(r"\bVoice service:\s*1\b", line, re.IGNORECASE):
+            voice_service = True
         talkgroups.update(extract_talkgroup_ids(line))
 
     confirmed = bool(crc_ok or unit_ok or sysinfo)
@@ -540,7 +566,16 @@ def _classify_tetra_lines(lines, bits_size=0):
             details.append(f"RESOURCE: {resource}")
         if talkgroups:
             details.append("Sprechgruppen/Adressen: " + ", ".join(sorted(talkgroups)[:8]))
-        audio_status = "verschlüsselt/unklar" if encrypted else "keine Audioframes"
+        if encrypted:
+            audio_status = "verschlüsselt"
+        elif clear_audio and (voice_service or resource):
+            audio_status = "unverschlüsselt, Backend fehlt"
+        elif clear_audio:
+            audio_status = "unverschlüsselt"
+        elif voice_service:
+            audio_status = "Audio möglich"
+        else:
+            audio_status = "keine Audioframes"
         return {
             "confirmed": True,
             "status": "bestätigt",
@@ -631,6 +666,9 @@ logger.setLevel(logging.INFO)
 logger.addHandler(handler)
 
 ERSTELLUNGSJAHR = 2026
+APP_NAME = "TETRA Decode"
+APP_WINDOW_TITLE = "TETRA Decode - SDR-Scanner"
+APP_SUBTITLE = "RTL-SDR TETRA-Suche, Sprechgruppen und Live-Audio"
 
 
 def _copyright_text():
@@ -641,6 +679,57 @@ def _copyright_text():
         else f"{ERSTELLUNGSJAHR} - {aktuelles_jahr}"
     )
     return f"© {jahre} Erik Schauer, do1ffe@darc.de"
+
+
+def _create_app_logo_pixmap(size: int = 48):
+    """Erzeugt ein kleines TETRA-Logo für Fenster und Kopfbereich."""
+    pixmap = QtGui.QPixmap(size, size)
+    pixmap.fill(QtCore.Qt.transparent)
+    painter = QtGui.QPainter(pixmap)
+    painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+
+    rect = QtCore.QRectF(1, 1, size - 2, size - 2)
+    gradient = QtGui.QLinearGradient(0, 0, size, size)
+    gradient.setColorAt(0.0, QtGui.QColor("#0f766e"))
+    gradient.setColorAt(1.0, QtGui.QColor("#2563eb"))
+    painter.setBrush(QtGui.QBrush(gradient))
+    painter.setPen(QtGui.QPen(QtGui.QColor("#0b3b48"), max(1, size // 18)))
+    painter.drawRoundedRect(rect, size * 0.18, size * 0.18)
+
+    painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), max(1, size // 16)))
+    mitte = QtCore.QPointF(size * 0.32, size * 0.68)
+    painter.drawLine(mitte, QtCore.QPointF(size * 0.32, size * 0.34))
+    painter.drawLine(
+        QtCore.QPointF(size * 0.24, size * 0.44),
+        QtCore.QPointF(size * 0.40, size * 0.44),
+    )
+    painter.drawArc(
+        QtCore.QRectF(size * 0.38, size * 0.27, size * 0.34, size * 0.34),
+        -45 * 16,
+        90 * 16,
+    )
+    painter.drawArc(
+        QtCore.QRectF(size * 0.30, size * 0.15, size * 0.58, size * 0.58),
+        -42 * 16,
+        84 * 16,
+    )
+
+    font = QtGui.QFont("Segoe UI", max(8, int(size * 0.22)), QtGui.QFont.Bold)
+    painter.setFont(font)
+    painter.drawText(
+        QtCore.QRectF(size * 0.18, size * 0.64, size * 0.64, size * 0.28),
+        QtCore.Qt.AlignCenter,
+        "TD",
+    )
+    painter.end()
+    return pixmap
+
+
+def _create_app_icon():
+    icon = QtGui.QIcon()
+    for size in (16, 24, 32, 48, 64, 128):
+        icon.addPixmap(_create_app_logo_pixmap(size))
+    return icon
 
 
 def list_sdr_devices():
@@ -2680,6 +2769,20 @@ class LEDIndicator(QtWidgets.QFrame):
         )
 
 
+class SortierbarerTabellenEintrag(QtWidgets.QTableWidgetItem):
+    """Tabelleneintrag, der numerische UserRole-Werte korrekt sortiert."""
+
+    def __lt__(self, other):
+        links = self.data(QtCore.Qt.UserRole)
+        rechts = other.data(QtCore.Qt.UserRole) if other is not None else None
+        if links is not None and rechts is not None:
+            try:
+                return float(links) < float(rechts)
+            except (TypeError, ValueError):
+                pass
+        return super().__lt__(other)
+
+
 class DecodedAudioPlayer(QtCore.QObject):
     """Spielt dekodierte TETRA-Audioframes über PyAudio ab."""
 
@@ -3059,7 +3162,7 @@ class TetraDecoder(QtCore.QObject):
                             continue
                         dekodiert = True
                         self.output.emit(txt)
-                        if re.search(r"\b(?:ENCRYPTED|Encr=[1-9]|CIPHER)\b", txt, re.I):
+                        if _tetra_line_indicates_encryption(txt):
                             self.encrypted.emit()
                 try:
                     p3.wait(timeout=5)
@@ -3188,7 +3291,7 @@ class TetraDecoder(QtCore.QObject):
                         break
                     txt = line.rstrip()
                     self.output.emit(txt)
-                    if re.search(r"\b(?:ENCRYPTED|Encr=[1-9]|CIPHER)\b", txt, re.I):
+                    if _tetra_line_indicates_encryption(txt):
                         self.encrypted.emit()
         except Exception as exc:
             self.output.emit(f"Decoder konnte nicht gestartet werden: {exc}")
@@ -3267,8 +3370,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SDR-Scanner")
+        self.setWindowTitle(APP_WINDOW_TITLE)
         self.resize(900, 700)
+        self.app_icon = _create_app_icon()
+        self.setWindowIcon(self.app_icon)
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.setWindowIcon(self.app_icon)
 
         # Widgets, die in mehreren Tabs verwendet werden
         self.start_btn = QtWidgets.QPushButton(
@@ -3598,10 +3706,15 @@ class MainWindow(QtWidgets.QMainWindow):
         tab_overview = QtWidgets.QWidget()
         overview_layout = standard_layout(tab_overview)
         kopf = QtWidgets.QHBoxLayout()
+        logo = QtWidgets.QLabel()
+        logo.setPixmap(_create_app_logo_pixmap(44))
+        logo.setFixedSize(48, 48)
+        logo.setAlignment(QtCore.Qt.AlignCenter)
+        kopf.addWidget(logo)
         titel_block = QtWidgets.QVBoxLayout()
-        titel = QtWidgets.QLabel("TETRA Decode")
+        titel = QtWidgets.QLabel(APP_NAME)
         titel.setObjectName("appTitle")
-        untertitel = QtWidgets.QLabel("SDR-Überwachung, Kanäle, Sprechgruppen und Audio")
+        untertitel = QtWidgets.QLabel(APP_SUBTITLE)
         untertitel.setObjectName("appSubtitle")
         titel_block.addWidget(titel)
         titel_block.addWidget(untertitel)
@@ -3678,6 +3791,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ["Frequenz", "Status", "Pegel", "Audio", "Letzte Sichtung"]
         )
         richte_tabelle_ein(self.overview_channel_table, stretch_spalte=1)
+        self._markiere_frequenzsortierung(self.overview_channel_table)
         overview_layout.addWidget(self.overview_channel_table, 1)
 
         tab_channels = QtWidgets.QWidget()
@@ -3729,6 +3843,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ["Frequenz", "Pegel", "Status", "Details", "Audio"]
         )
         richte_tabelle_ein(self.signal_search_table, stretch_spalte=3)
+        self._markiere_frequenzsortierung(self.signal_search_table)
         channel_layout.addWidget(self.signal_search_table, 2)
         self.filter_edit = QtWidgets.QLineEdit()
         self.filter_edit.setPlaceholderText("Regex-Filter")
@@ -3985,7 +4100,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(tab_overview, "Übersicht")
         self.tabs.addTab(tab_channels, "Kanäle")
         self.tabs.addTab(tab_talkgroups, "Sprechgruppen")
-        self.tabs.addTab(tab_audio_data, "Audio & Daten")
+        self.tabs.addTab(tab_audio_data, "Audio && Daten")
         self.tabs.addTab(tab_network, "Netz")
         self.tabs.addTab(tab_spectrum, "Spektrum")
         self.tabs.addTab(tab_settings, "Einstellungen")
@@ -4273,8 +4388,8 @@ class MainWindow(QtWidgets.QMainWindow):
         v8.addLayout(auswahl_layout)
         v8.addWidget(self.talkgroup_table)
 
-        self.tabs.addTab(tab1, "Spektrum & Steuerung")
-        self.tabs.addTab(tab2, "Audio & Aktivit\u00e4t")
+        self.tabs.addTab(tab1, "Spektrum && Steuerung")
+        self.tabs.addTab(tab2, "Audio && Aktivit\u00e4t")
         self.tabs.addTab(tab3, "Einstellungen")
         self.tabs.addTab(tab4, "TETRA-Dekodierung")
         self.tabs.addTab(tab5, "Zellen")
@@ -4321,6 +4436,62 @@ class MainWindow(QtWidgets.QMainWindow):
         if index < 0:
             index = 0
         self.audio_mode_combo.setCurrentIndex(index)
+
+    def _markiere_frequenzsortierung(self, tabelle):
+        header = tabelle.horizontalHeader()
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(0, QtCore.Qt.AscendingOrder)
+
+    def _append_plain_text(self, feld, text: str):
+        if feld is None:
+            return
+        leiste = feld.verticalScrollBar()
+        folgen = leiste.value() >= leiste.maximum() - 3
+        feld.appendPlainText(text)
+        if folgen:
+            leiste.setValue(leiste.maximum())
+
+    def _frequenzzeile(self, tabelle, freq: float):
+        key = int(round(freq))
+        for row in range(tabelle.rowCount()):
+            item = tabelle.item(row, 0)
+            if not item:
+                continue
+            wert = item.data(QtCore.Qt.UserRole)
+            if wert is None:
+                continue
+            try:
+                if int(round(float(wert))) == key:
+                    return row
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _sortiere_frequenztabelle(self, tabelle, zeilen_map=None):
+        tabelle.setSortingEnabled(True)
+        tabelle.sortItems(0, QtCore.Qt.AscendingOrder)
+        tabelle.setSortingEnabled(False)
+        self._markiere_frequenzsortierung(tabelle)
+        if zeilen_map is not None:
+            zeilen_map.clear()
+            for row in range(tabelle.rowCount()):
+                item = tabelle.item(row, 0)
+                if not item:
+                    continue
+                freq = item.data(QtCore.Qt.UserRole)
+                if freq is not None:
+                    zeilen_map[int(round(float(freq)))] = row
+
+    def _scroll_zeile_sichtbar(self, tabelle, row: int, immer: bool = False):
+        if row is None or row < 0:
+            return
+        item = tabelle.item(row, 0)
+        if not item:
+            return
+        leiste = tabelle.verticalScrollBar()
+        folgen = leiste.value() >= leiste.maximum() - 2
+        if immer or folgen:
+            tabelle.scrollToItem(item, QtWidgets.QAbstractItemView.EnsureVisible)
 
     def _audio_stream_endpoint(self):
         host = "127.0.0.1"
@@ -4461,11 +4632,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if freq <= 0:
             return
         key = int(round(freq))
-        row = self._overview_signal_rows.get(key)
+        row = self._frequenzzeile(self.overview_channel_table, freq)
         if row is None:
             row = self.overview_channel_table.rowCount()
             self.overview_channel_table.insertRow(row)
-            self._overview_signal_rows[key] = row
 
         status = str(info.get("status", ""))
         werte = [
@@ -4482,13 +4652,19 @@ class MainWindow(QtWidgets.QMainWindow):
             farbe = QtGui.QColor("#fff4c4")
         elif status in ("Fehler", "kein TETRA"):
             farbe = QtGui.QColor("#f8d7da")
+        self.overview_channel_table.setSortingEnabled(False)
         for spalte, wert in enumerate(werte):
-            item = QtWidgets.QTableWidgetItem(wert)
+            item = SortierbarerTabellenEintrag(wert)
             if spalte == 0:
                 item.setData(QtCore.Qt.UserRole, freq)
+            elif spalte == 2:
+                item.setData(QtCore.Qt.UserRole, float(info.get("power", 0.0)))
             if farbe is not None:
                 item.setBackground(farbe)
             self.overview_channel_table.setItem(row, spalte, item)
+        self._sortiere_frequenztabelle(self.overview_channel_table, self._overview_signal_rows)
+        row = self._overview_signal_rows.get(key, row)
+        self._scroll_zeile_sichtbar(self.overview_channel_table, row)
         self._refresh_dashboard_status()
 
     def _toggle_monitoring(self, enabled: bool):
@@ -4702,16 +4878,17 @@ class MainWindow(QtWidgets.QMainWindow):
             )[:200]
             self.scan_results = dict(top_items)
 
-        top_peaks = sorted(
+        top_peaks_nach_pegel = sorted(
             self.scan_results.values(),
             key=lambda item: item["power"],
             reverse=True,
         )[:20]
+        top_peaks = sorted(top_peaks_nach_pegel, key=lambda item: item["freq"])
 
         self.freq_list.clear()
         for entry in top_peaks:
             freq_mhz = entry["freq"] / 1e6
-            text = f"{freq_mhz:.3f} MHz \u2013 {entry['power']:.1f} dB"
+            text = f"{freq_mhz:.3f} MHz - {entry['power']:.1f} dB"
             item = QtWidgets.QListWidgetItem(text)
             item.setData(QtCore.Qt.UserRole, entry["freq"])
             self.freq_list.addItem(item)
@@ -4798,7 +4975,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.audio_status_label.setText(
                 "Audio-Status: keine audiofähige Decoder-Kette verfügbar"
             )
-            self.tetra_output.appendPlainText(
+            self._append_plain_text(
+                self.tetra_output,
                 "Audioausgabe ist nur bei unverschlüsselter Sprache und "
                 "audiofähiger Decoder-Kette möglich."
             )
@@ -4809,7 +4987,8 @@ class MainWindow(QtWidgets.QMainWindow):
             device_text = "ohne Index"
         else:
             device_text = f"Index {device_id}"
-        self.log.appendPlainText(
+        self._append_plain_text(
+            self.log,
             f"Dekodierung gestartet mit Gerät {device_text} ({name}) "
             f"bei {self.current_frequency/1e6:.3f} MHz"
         )
@@ -4855,11 +5034,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.signal_search_table.setRowCount(0)
         self._signal_search_rows = {}
         self._set_signal_search_buttons(True)
-        self.log.appendPlainText(
+        self._append_plain_text(
+            self.log,
             f"TETRA-Signalsuche gestartet mit Gerät {name}, PPM {self.ppm_spin.value()}, "
             f"Gain {_resolve_gain_value(gain_setting):.1f} dB, {limit_text}."
         )
-        self.tetra_output.appendPlainText("TETRA-Signalsuche gestartet.")
+        self._append_plain_text(self.tetra_output, "TETRA-Signalsuche gestartet.")
 
         worker = TetraSignalSearchWorker(
             ranges=ranges,
@@ -4898,8 +5078,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(str)
     def _append_signal_search_log(self, text: str):
-        self.log.appendPlainText(text)
-        self.tetra_output.appendPlainText(f"[Signalsuche] {text}")
+        self._append_plain_text(self.log, text)
+        self._append_plain_text(self.tetra_output, f"[Signalsuche] {text}")
         logger.info(text)
 
     @QtCore.pyqtSlot(dict)
@@ -4909,11 +5089,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if freq <= 0:
             return
         key = int(round(freq))
-        row = self._signal_search_rows.get(key)
+        row = self._frequenzzeile(self.signal_search_table, freq)
         if row is None:
             row = self.signal_search_table.rowCount()
             self.signal_search_table.insertRow(row)
-            self._signal_search_rows[key] = row
 
         status = str(info.get("status", ""))
         values = [
@@ -4923,10 +5102,13 @@ class MainWindow(QtWidgets.QMainWindow):
             str(info.get("details", "")),
             str(info.get("audio", "")),
         ]
+        self.signal_search_table.setSortingEnabled(False)
         for column, value in enumerate(values):
-            item = QtWidgets.QTableWidgetItem(value)
+            item = SortierbarerTabellenEintrag(value)
             if column == 0:
                 item.setData(QtCore.Qt.UserRole, freq)
+            elif column == 1:
+                item.setData(QtCore.Qt.UserRole, float(info.get("power", 0.0)))
             if status == "bestätigt":
                 item.setBackground(QtGui.QColor("#c8f7c5"))
             elif status in ("unklar", "möglich"):
@@ -4934,11 +5116,13 @@ class MainWindow(QtWidgets.QMainWindow):
             elif status in ("Fehler", "kein TETRA"):
                 item.setBackground(QtGui.QColor("#f5d0d0"))
             self.signal_search_table.setItem(row, column, item)
+        self._sortiere_frequenztabelle(self.signal_search_table, self._signal_search_rows)
+        row = self._signal_search_rows.get(key, row)
 
         lines = info.get("lines") or []
         if lines and status in ("bestätigt", "unklar"):
             for line in lines[:80]:
-                self.tetra_output.appendPlainText(f"[{freq/1e6:.4f} MHz] {line}")
+                self._append_plain_text(self.tetra_output, f"[{freq/1e6:.4f} MHz] {line}")
                 self._append_decoder_data(line)
                 if status == "bestätigt":
                     self.current_frequency = freq
@@ -4950,16 +5134,20 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.freq_label.setText(f"Frequenz: {freq/1e6:.3f} MHz")
                 self.tetra_start_btn.setEnabled(True)
                 self.signal_search_table.selectRow(row)
-                self.log.appendPlainText(
+                self._scroll_zeile_sichtbar(self.signal_search_table, row, immer=True)
+                self._append_plain_text(
+                    self.log,
                     f"TETRA-Signal bestätigt auf {freq/1e6:.4f} MHz."
                 )
+        else:
+            self._scroll_zeile_sichtbar(self.signal_search_table, row)
         self._refresh_dashboard_status()
 
     @QtCore.pyqtSlot()
     def _tetra_signal_search_finished(self):
         self._set_signal_search_buttons(False)
-        self.log.appendPlainText("TETRA-Signalsuche beendet.")
-        self.tetra_output.appendPlainText("TETRA-Signalsuche beendet.")
+        self._append_plain_text(self.log, "TETRA-Signalsuche beendet.")
+        self._append_plain_text(self.tetra_output, "TETRA-Signalsuche beendet.")
         self.tetra_signal_search = None
         if self.monitoring_active:
             delay_ms = int(self.config.get("monitor_cycle_delay_sec", 5)) * 1000
@@ -5052,7 +5240,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     return
             except re.error:
                 pass
-        self.tetra_output.appendPlainText(line)
+        self._append_plain_text(self.tetra_output, line)
         if bool(self.config.get("log_decoder_lines", False)):
             logger.info(line)
         self._append_decoder_data(line)
@@ -5302,6 +5490,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.current_frequency is not None:
             freq_text = f"{self.current_frequency/1e6:.4f} MHz"
         typ = _decoder_line_type(line)
+        leiste = self.decoder_data_table.verticalScrollBar()
+        folgen = leiste.value() >= leiste.maximum() - 2
         self.decoder_data.append({
             "zeit": zeit,
             "freq": freq_text,
@@ -5320,7 +5510,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.decoder_data_table.setItem(row, column, item)
         if self.decoder_data_table.rowCount() > self.decoder_data.maxlen:
             self.decoder_data_table.removeRow(0)
-        self.decoder_data_table.scrollToBottom()
+        if folgen:
+            self.decoder_data_table.scrollToBottom()
 
     def parse_network_info(self, line: str):
         info = _extract_sysinfo(line)
