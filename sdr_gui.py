@@ -627,6 +627,8 @@ def _classify_tetra_lines(lines, bits_size=0):
 
 
 def _decoder_line_type(line: str):
+    if line.startswith("Audiohinweis:"):
+        return "Audio"
     if re.search(r"CRC COMP:\s*0x[0-9A-Fa-f]+\s+OK\b", line):
         return "CRC OK"
     if "CRC COMP:" in line:
@@ -658,9 +660,16 @@ def _decoder_line_for_ui(line: str) -> bool:
         return False
     if text.startswith("Audioausgabe:"):
         return True
+    if text.startswith("Audiohinweis:"):
+        return True
     if text.startswith(("Keine ", "Zu wenige ", "Windows-TETRA-", "Nutze ")):
         return True
     if "BNCH SYSINFO" in text or "SYSINFO PDU" in text:
+        return True
+    if re.search(
+        r"^(?:Advanced link|Air encryption|Voice service|SNDCP data|Circuit data):",
+        text,
+    ):
         return True
     if "ACCESS-ASSIGN PDU" in text and "Traffic" in text:
         return True
@@ -675,6 +684,29 @@ def _decoder_line_for_ui(line: str) -> bool:
     if extract_talkgroup_ids(text):
         return True
     return False
+
+
+def _wichtige_decoder_zeilen(lines, limit: int = 120):
+    wichtige = []
+    for line in lines:
+        if _decoder_line_for_ui(line):
+            wichtige.append(line)
+            if len(wichtige) >= limit:
+                break
+    return wichtige
+
+
+def _audio_hinweis_aus_tetra_zeilen(lines, bits_size=0):
+    info = _classify_tetra_lines(lines, bits_size)
+    audio = str(info.get("audio", ""))
+    if audio in ("unverschlüsselt, Backend fehlt", "unverschlüsselt", "Audio möglich"):
+        return (
+            "Audiohinweis: unverschlüsselte TETRA-Sprache ist signalisiert, "
+            "aber die aktuelle Windows-Pipeline liefert kein PCM-Audio."
+        )
+    if audio == "verschlüsselt":
+        return "Audiohinweis: TETRA-Sprache ist verschlüsselt; Audioausgabe bleibt aus."
+    return ""
 
 
 def _extract_sysinfo(line: str):
@@ -3160,6 +3192,9 @@ class TetraDecoder(QtCore.QObject):
         self._audio_thread = None
         self._audio_path = None
         self._audio_mode = None
+        self.tune_frequency_hz = None
+        self.iq_mode = "normal"
+        self.xlate_hz = 0.0
 
     def audio_output_supported(self):
         return _legacy_audio_decoder_available()
@@ -3215,11 +3250,12 @@ class TetraDecoder(QtCore.QObject):
         self._procs = []
 
     def _rtl_sdr_cmd(self, frequency: float):
+        tune_frequency = self.tune_frequency_hz or frequency
         cmd = [
             "rtl_sdr",
             "-p", str(self.ppm),
             "-g", str(_resolve_gain_value(self.gain)),
-            "-f", str(int(frequency)),
+            "-f", str(int(tune_frequency)),
             "-s", "2000000",
         ]
         if self.device_id is not None:
@@ -3284,8 +3320,13 @@ class TetraDecoder(QtCore.QObject):
             "Audioausgabe: mit der aktuellen Windows-Osmocom-Pipeline nicht verfügbar; "
             "Steuerdaten, Netzinfos und Sprechgruppen/Adressen werden dekodiert."
         )
-        batch_seconds = 10
-        while self._running.is_set():
+        batch_seconds = 8
+        max_ui_lines = 45
+        max_blocks = 3
+        block_count = 0
+        letzter_audio_hinweis = None
+        while self._running.is_set() and block_count < max_blocks:
+            block_count += 1
             bits_path = None
             try:
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".bits")
@@ -3293,9 +3334,11 @@ class TetraDecoder(QtCore.QObject):
                 tmp.close()
 
                 with open(bits_path, "wb") as bits_out:
+                    conv_env = _gnuradio_env_for(gnuradio_python)
+                    conv_env["TETRA_IQ_MODE"] = str(self.iq_mode or "normal")
                     channelizer_env = _gnuradio_env_for(gnuradio_python)
                     channelizer_env.update({
-                        "TETRA_XLATE_HZ": "0",
+                        "TETRA_XLATE_HZ": str(float(self.xlate_hz or 0.0)),
                         "TETRA_LOW_PASS": "12500",
                         "TETRA_TRANSITION": "2500",
                         "TETRA_OUT_RATE": "36000",
@@ -3312,6 +3355,7 @@ class TetraDecoder(QtCore.QObject):
                         stdin=p1.stdout,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL,
+                        env=conv_env,
                         **_hidden_subprocess_kwargs(),
                     )
                     self._procs.append(pconv)
@@ -3361,28 +3405,55 @@ class TetraDecoder(QtCore.QObject):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     bufsize=1,
                     **_hidden_subprocess_kwargs(),
                 )
                 self._procs.append(p3)
-                dekodiert = False
-                if p3.stdout:
-                    for line in p3.stdout:
-                        if not self._running.is_set():
-                            break
-                        txt = line.rstrip()
-                        if not txt or txt == "EOF":
-                            continue
-                        dekodiert = True
-                        self.output.emit(txt)
-                        if _tetra_line_indicates_encryption(txt):
-                            self.encrypted.emit()
                 try:
-                    p3.wait(timeout=5)
-                except Exception:
-                    pass
+                    out, _ = p3.communicate(timeout=max(8, batch_seconds + 5))
+                except subprocess.TimeoutExpired:
+                    self.output.emit(
+                        "Decoderblock wurde begrenzt, damit die Oberfläche bedienbar bleibt."
+                    )
+                    self._terminate_processes()
+                    try:
+                        out, _ = p3.communicate(timeout=2)
+                    except Exception:
+                        out = ""
                 finally:
                     self._terminate_processes()
+
+                lines = [
+                    line.strip()
+                    for line in (out or "").splitlines()
+                    if line.strip() and line.strip() != "EOF"
+                ]
+                dekodiert = bool(lines)
+                if any(_tetra_line_indicates_encryption(line) for line in lines):
+                    self.encrypted.emit()
+
+                audio_hinweis = _audio_hinweis_aus_tetra_zeilen(lines, bits_size)
+                if audio_hinweis and audio_hinweis != letzter_audio_hinweis:
+                    self.output.emit(audio_hinweis)
+                    letzter_audio_hinweis = audio_hinweis
+
+                sichtbare_zeilen = _wichtige_decoder_zeilen(lines, limit=max_ui_lines)
+                for txt in sichtbare_zeilen:
+                    if not self._running.is_set():
+                        break
+                    self.output.emit(txt)
+                if dekodiert and not sichtbare_zeilen:
+                    self.output.emit(
+                        "TETRA-Daten empfangen; Rohdaten ohne neue Netz-, "
+                        "Sprechgruppen- oder Audioinfos wurden ausgeblendet."
+                    )
+                elif len(sichtbare_zeilen) >= max_ui_lines:
+                    self.output.emit(
+                        "Weitere Decoderzeilen in diesem Block wurden ausgeblendet, "
+                        "damit die Oberfläche reaktionsfähig bleibt."
+                    )
                 if not dekodiert:
                     self.output.emit(
                         "Keine gültigen TETRA-Bursts in diesem Zeitfenster dekodiert."
@@ -3396,6 +3467,11 @@ class TetraDecoder(QtCore.QObject):
                         os.remove(bits_path)
                     except OSError:
                         pass
+        if self._running.is_set():
+            self.output.emit(
+                "Windows-Dekodierlauf beendet; weitere Blöcke können bei Bedarf "
+                "erneut gestartet werden."
+            )
 
     def _legacy_pipeline(self, frequency: float, audio_enabled: bool):
         receiver_cmd = ["receiver1", "-f", str(int(frequency)), "-p", str(self.ppm)]
@@ -3821,6 +3897,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.freq_history = deque(maxlen=10)
         self.scan_results = {}
         self.current_frequency = None
+        self.current_tune_frequency = None
+        self.current_xlate_hz = 0.0
+        self.current_iq_mode = "normal"
         self.cells = {}
         self.packet_counts = {}
         self.talkgroups = {}
@@ -4946,6 +5025,12 @@ class MainWindow(QtWidgets.QMainWindow):
             item = self._tabellen_item(wert, limit=90)
             if spalte == 0:
                 item.setData(QtCore.Qt.UserRole, freq)
+                item.setData(
+                    QtCore.Qt.UserRole + 1,
+                    float(info.get("probe_frequency_hz") or freq),
+                )
+                item.setData(QtCore.Qt.UserRole + 2, float(info.get("xlate_hz") or 0.0))
+                item.setData(QtCore.Qt.UserRole + 3, str(info.get("iq_mode") or "normal"))
             elif spalte == 2:
                 item.setData(QtCore.Qt.UserRole, float(info.get("power", 0.0)))
             if farbe is not None:
@@ -5251,6 +5336,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log.appendPlainText(f"Gew\u00e4hlte Frequenz: {freq/1e6:.3f} MHz")
         self.freq_history.appendleft(freq / 1e6)
         self.current_frequency = freq
+        self.current_tune_frequency = freq
+        self.current_xlate_hz = 0.0
+        self.current_iq_mode = "normal"
         self.player.start(freq)
         self.tetra_start_btn.setEnabled(True)
         if self.tetra_auto_cb.isChecked():
@@ -5286,6 +5374,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_ppm(self.ppm_spin.value())
         self.decoder.device_id = device_id
         self.decoder.gain = _normalize_gain_setting(self.config.get("gain", "max"))
+        self.decoder.tune_frequency_hz = self.current_tune_frequency or self.current_frequency
+        self.decoder.xlate_hz = float(self.current_xlate_hz or 0.0)
+        self.decoder.iq_mode = str(self.current_iq_mode or "normal")
         self.scanner.stop()
         self.player.stop()
         self.tetra_start_btn.setEnabled(False)
@@ -5322,7 +5413,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._append_plain_text(
             self.log,
             f"Dekodierung gestartet mit Gerät {device_text} ({name}) "
-            f"bei {self.current_frequency/1e6:.3f} MHz"
+            f"bei {self.current_frequency/1e6:.3f} MHz "
+            f"(Tuning {self.decoder.tune_frequency_hz/1e6:.4f} MHz, "
+            f"Kanalversatz {self.decoder.xlate_hz:+.0f} Hz, IQ {self.decoder.iq_mode})"
         )
         self.decoder.start(self.current_frequency)
 
@@ -5443,6 +5536,12 @@ class MainWindow(QtWidgets.QMainWindow):
             item = self._tabellen_item(value, limit=limit)
             if column == 0:
                 item.setData(QtCore.Qt.UserRole, freq)
+                item.setData(
+                    QtCore.Qt.UserRole + 1,
+                    float(info.get("probe_frequency_hz") or freq),
+                )
+                item.setData(QtCore.Qt.UserRole + 2, float(info.get("xlate_hz") or 0.0))
+                item.setData(QtCore.Qt.UserRole + 3, str(info.get("iq_mode") or "normal"))
             elif column == 1:
                 item.setData(QtCore.Qt.UserRole, float(info.get("power", 0.0)))
             if status == "bestätigt":
@@ -5457,9 +5556,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         lines = info.get("lines") or []
         if lines and status in ("bestätigt", "unklar"):
-            for line in lines[:80]:
-                self._append_plain_text(self.tetra_output, f"[{freq/1e6:.4f} MHz] {line}")
-                self._append_decoder_data(line)
+            angezeigte_zeilen = 0
+            for line in lines[:300]:
+                if _decoder_line_for_ui(line) and angezeigte_zeilen < 80:
+                    self._append_plain_text(
+                        self.tetra_output,
+                        f"[{freq/1e6:.4f} MHz] {line}",
+                    )
+                    self._append_decoder_data(line)
+                    angezeigte_zeilen += 1
                 if status == "bestätigt":
                     self.current_frequency = freq
                     self.parse_cell_info(line)
@@ -5468,6 +5573,9 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.parse_talkgroups(line)
             if status == "bestätigt":
                 self.freq_label.setText(f"Frequenz: {freq/1e6:.3f} MHz")
+                self.current_tune_frequency = float(info.get("probe_frequency_hz") or freq)
+                self.current_xlate_hz = float(info.get("xlate_hz") or 0.0)
+                self.current_iq_mode = str(info.get("iq_mode") or "normal")
                 self.tetra_start_btn.setEnabled(True)
                 self.signal_search_table.selectRow(row)
                 self._scroll_zeile_sichtbar(self.signal_search_table, row, immer=True)
@@ -5491,13 +5599,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_dashboard_status()
 
     def _selected_signal_candidate(self):
-        row = self.signal_search_table.currentRow()
-        tabelle = self.signal_search_table
+        kandidaten = [(self.signal_search_table, 2)]
+        if hasattr(self, "overview_channel_table"):
+            kandidaten.append((self.overview_channel_table, 1))
+
+        tabelle = None
         status_spalte = 2
-        if row < 0 and hasattr(self, "overview_channel_table"):
-            row = self.overview_channel_table.currentRow()
-            tabelle = self.overview_channel_table
-            status_spalte = 1
+        row = -1
+        for tab, spalte in kandidaten:
+            auswahl = tab.selectionModel().selectedRows() if tab.selectionModel() else []
+            if auswahl:
+                tabelle = tab
+                status_spalte = spalte
+                row = auswahl[0].row()
+                break
+        if row < 0:
+            for tab, spalte in kandidaten:
+                if tab.currentRow() >= 0:
+                    tabelle = tab
+                    status_spalte = spalte
+                    row = tab.currentRow()
+                    break
         if row < 0:
             return None
         freq_item = tabelle.item(row, 0)
@@ -5510,8 +5632,17 @@ class MainWindow(QtWidgets.QMainWindow):
                 freq = float(freq_item.text().split()[0].replace(",", ".")) * 1e6
             except (ValueError, IndexError):
                 return None
+        probe_frequency = freq_item.data(QtCore.Qt.UserRole + 1) or freq
+        xlate_hz = freq_item.data(QtCore.Qt.UserRole + 2) or 0.0
+        iq_mode = freq_item.data(QtCore.Qt.UserRole + 3) or "normal"
         status = status_item.text() if status_item else ""
-        return float(freq), status
+        return {
+            "frequency": float(freq),
+            "probe_frequency": float(probe_frequency),
+            "xlate_hz": float(xlate_hz),
+            "iq_mode": str(iq_mode),
+            "status": status,
+        }
 
     @QtCore.pyqtSlot(QtWidgets.QTableWidgetItem)
     def _decode_signal_candidate_from_item(self, item):
@@ -5529,13 +5660,17 @@ class MainWindow(QtWidgets.QMainWindow):
         if not selected:
             self.log.appendPlainText("Bitte zuerst eine Frequenz aus der Signalsuche markieren.")
             return
-        freq, status = selected
+        freq = selected["frequency"]
+        status = selected["status"]
         self.stop_monitoring()
         self.stop_tetra_signal_search(wait=True)
         self._set_manual_lock(True)
         self.freq_label.setText(f"Frequenz: {freq/1e6:.3f} MHz")
         self.freq_history.appendleft(freq / 1e6)
         self.current_frequency = freq
+        self.current_tune_frequency = selected["probe_frequency"]
+        self.current_xlate_hz = selected["xlate_hz"]
+        self.current_iq_mode = selected["iq_mode"]
         self.tetra_start_btn.setEnabled(True)
         if status != "bestätigt":
             self.log.appendPlainText(
@@ -5544,7 +5679,10 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         else:
             self.log.appendPlainText(
-                f"Bestätigte TETRA-Frequenz übernommen: {freq/1e6:.4f} MHz."
+                f"Bestätigte TETRA-Frequenz übernommen: {freq/1e6:.4f} MHz "
+                f"(Tuning {self.current_tune_frequency/1e6:.4f} MHz, "
+                f"Kanalversatz {self.current_xlate_hz:+.0f} Hz, "
+                f"IQ {self.current_iq_mode})."
             )
         self._refresh_dashboard_status()
         self.start_decoding()
@@ -5594,6 +5732,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if sichtbar:
             self._append_decoder_data(line)
         if line.startswith("Audioausgabe:"):
+            self.audio_status_label.setText(f"Audio-Status: {line.split(':', 1)[1].strip()}")
+            self._refresh_dashboard_status()
+        if line.startswith("Audiohinweis:"):
             self.audio_status_label.setText(f"Audio-Status: {line.split(':', 1)[1].strip()}")
             self._refresh_dashboard_status()
         self.parse_cell_info(line)
