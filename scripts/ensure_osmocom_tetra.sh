@@ -33,8 +33,23 @@ check_build_requirements() {
     pkg-config --exists libosmocore || die "libosmocore-dev fehlt."
 }
 
+apply_local_patches() {
+    local patch_file="${PROJECT_ROOT}/patches/osmo-tetra/audio_udp_backend.patch"
+    local target_file="${OSMO_SOURCE_DIR}/src/lower_mac/tetra_lower_mac.c"
+    [[ -f "${patch_file}" ]] || return
+    if grep -q "TETRA_AUDIO_UDP_PORT" "${target_file}"; then
+        return
+    fi
+
+    log "Aktiviere lokalen Audio-Burst-Ausgang für tetra-rx..."
+    (
+        cd "${OSMO_SOURCE_DIR}"
+        patch -p1 < "${patch_file}"
+    )
+}
+
 build_and_install() {
-    log "Baue offizielle Osmocom-TETRA Werkzeuge aus ${OSMO_SOURCE_DIR}..."
+    log "Baue Osmocom-TETRA-Werkzeuge aus ${OSMO_SOURCE_DIR}..."
     make -C "${OSMO_SOURCE_DIR}/src"
 
     mkdir -p "${OSMO_TOOL_DIR}"
@@ -55,13 +70,16 @@ warn_optional_runtime() {
         return
     fi
     if ! python3 -c 'import gnuradio' >/dev/null 2>&1; then
-        log "Warnung: GNU Radio Python-Modul fehlt; installiere gnuradio fuer Live-Demodulation."
+        log "Warnung: GNU Radio Python-Modul fehlt; installiere GNU Radio für Live-Demodulation."
     fi
 }
 
 ensure_submodule
 check_build_requirements
+apply_local_patches
 build_and_install
 warn_optional_runtime
 
 log "Fertig. Toolpfad: ${OSMO_TOOL_DIR}"
+
+# © 2026 Erik Schauer, do1ffe@darc.de

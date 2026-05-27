@@ -150,12 +150,24 @@ Er installiert alle benötigten Zusatzkomponenten lokal mit, damit die Anwendung
 direkt nach der Installation startbereit ist. `setup.ps1` und `install.ps1`
 bleiben nur als Entwickler-/Fallback-Skripte erhalten.
 
+Für Live-Audio aus unverschlüsselten TETRA-Sprachkanälen gibt es zusätzlich
+ein WSL-Backend. Es baut ein gepatchtes `tetra-rx`, lädt den ETSI-TETRA-Codec
+und installiert `cdecoder`/`sdecoder` lokal unter `tools/tetra-codec`, ohne
+dauerhaft Audiodateien zu schreiben:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ensure_tetra_audio_backend.ps1
+```
+
+Die GUI nutzt dieses Backend automatisch, wenn „Decoder-Audio“ aktiv ist.
+Verschlüsselte TETRA-Kanäle werden erkannt und bleiben stumm.
+
 ## Funktionen
 
 - **Frequenzscan** – nutzt `rtl_power`, um einen wählbaren Bereich abzusuchen. Das stärkste Signal wird automatisch für die weitere Verarbeitung ausgewählt.
 - **Echtzeit-Spektrum** – das Spektrum wird während des Scans kontinuierlich dargestellt.
 - **Audio-Demodulation** – `rtl_fm` demoduliert die gewählte Frequenz, PyAudio spielt das Audio ab. Eine anpassbare AGC hält die Lautstärke stabil.
-- **TETRA-Dekodierung** – integriert `receiver1`, `demod_float` oder `float_to_bits` sowie `tetra-rx`, um unverschlüsselte Kontrollkanäle zu dekodieren. Die Ausgabe erscheint in einem eigenen Tab und kann per Regex gefiltert werden.
+- **TETRA-Dekodierung** – integriert `receiver1`, `demod_float` oder `float_to_bits` sowie `tetra-rx`, um Kontrollkanäle, Netzinfos und Sprechgruppen zu dekodieren. Mit gebautem Audio-Backend werden unverschlüsselte Sprach-Bursts live als PCM wiedergegeben.
 - **Aktivitätserkennung** – Audio-Pegelüberwachung zeigt Aktivität an und kann optional Telegram-Benachrichtigungen senden. Erkannte Aktivität wird als WAV aufgezeichnet.
 - **Zellinformationen** – dekodierte Cell-IDs, LAC, MCC/MNC und die genutzte Frequenz werden in einer Tabelle gespeichert und können als CSV exportiert werden.
 - **Paketstatistiken** – zeigt ein Balkendiagramm der empfangenen TETRA-Pakettypen.

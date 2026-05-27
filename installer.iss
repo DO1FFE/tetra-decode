@@ -56,6 +56,7 @@ Source: "requirements.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "setup.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "install.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "scripts\*"; DestDir: "{app}\scripts"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "patches\*"; DestDir: "{app}\patches"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "third_party\osmo-tetra\*"; DestDir: "{app}\third_party\osmo-tetra"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "installer_payload\rtl-sdr\x64\*"; DestDir: "{commonappdata}\tetra-decode\rtl-sdr\x64"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "installer_payload\osmocom-tetra\*"; DestDir: "{commonappdata}\tetra-decode\osmocom-tetra"; Flags: ignoreversion recursesubdirs createallsubdirs

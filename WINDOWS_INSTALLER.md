@@ -7,6 +7,7 @@ Das Windows-Komplettpaket wird mit Inno Setup gebaut und liegt nach einem erfolg
 - `tetra-decode.exe`: per PyInstaller gebaute GUI mit den Python-Abhängigkeiten aus `requirements.txt`.
 - RTL-SDR-Werkzeuge: `rtl_sdr.exe`, `rtl_fm.exe`, `rtl_power.exe`, `rtl_test.exe` und benötigte Laufzeitbibliotheken.
 - Osmocom-TETRA: `tetra-rx.exe`, `float_to_bits.exe`, MSYS2-Laufzeitbibliotheken und das offizielle `simdemod3.py` aus `third_party/osmo-tetra`.
+- TETRA-Audio-Backend: Skripte und lokale Patches für den WSL-Build von audiofähigem `tetra-rx` sowie ETSI-Codec `cdecoder`/`sdecoder`.
 - Zadig: Treiberwerkzeug für WinUSB/libusb-Geräte.
 - GNU Radio/Radioconda: wird als großer Installer-Payload eingebettet und während der Installation lokal installiert. Dadurch ist kein winget-, Chocolatey- oder Internet-Zugriff auf dem Zielsystem nötig.
 

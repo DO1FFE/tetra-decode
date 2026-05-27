@@ -65,6 +65,9 @@ Section "Programmdateien" SEC_APP
   SetOutPath "$INSTDIR\scripts"
   File /r "scripts\*"
 
+  SetOutPath "$INSTDIR\patches"
+  File /r "patches\*"
+
   SetOutPath "$INSTDIR\third_party\osmo-tetra"
   File /r /x ".git" "third_party\osmo-tetra\*"
 
