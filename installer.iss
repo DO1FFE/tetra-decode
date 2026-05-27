@@ -110,4 +110,4 @@ begin
   Result := Pos(';' + Uppercase(Path) + ';', ';' + Uppercase(CurrentPath) + ';') = 0;
 end;
 
-; © 2026 Erik Schauer, do1ffe@darc.de
+// © 2026 Erik Schauer, do1ffe@darc.de
