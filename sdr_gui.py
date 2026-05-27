@@ -208,6 +208,41 @@ while True:
     sys.stdout.buffer.flush()
 """
 
+_TETRA_CHANNELIZER_SCRIPT = r"""
+import os
+from gnuradio import gr, blocks, filter
+from gnuradio.filter import firdes
+
+sample_rate = float(os.environ.get("TETRA_SAMPLE_RATE", "2000000"))
+first_decim = int(os.environ.get("TETRA_FIRST_DECIM", "32"))
+out_rate = float(os.environ.get("TETRA_OUT_RATE", "36000"))
+low_pass = float(os.environ.get("TETRA_LOW_PASS", "12500"))
+transition = float(os.environ.get("TETRA_TRANSITION", "2500"))
+xlate_hz = float(os.environ.get("TETRA_XLATE_HZ", "0"))
+
+
+class tetra_channelizer(gr.top_block):
+    def __init__(self):
+        gr.top_block.__init__(self, "tetra-channelizer", catch_exceptions=True)
+        source = blocks.file_descriptor_source(gr.sizeof_gr_complex, 0, False)
+        taps = firdes.low_pass(1.0, sample_rate, low_pass, transition)
+        xlate = filter.freq_xlating_fir_filter_ccc(
+            first_decim,
+            taps,
+            xlate_hz,
+            sample_rate,
+        )
+        if_rate = sample_rate / first_decim
+        resampler = filter.mmse_resampler_cc(0, float(if_rate / out_rate))
+        sink = blocks.file_descriptor_sink(gr.sizeof_gr_complex, 1)
+        self.connect(source, xlate, resampler, sink)
+
+
+tb = tetra_channelizer()
+tb.start()
+tb.wait()
+"""
+
 
 def _hidden_subprocess_kwargs():
     """Verhindert sichtbare Konsolenfenster bei Hilfsprogrammen unter Windows."""
@@ -2237,30 +2272,36 @@ class TetraSignalSearchWorker(QtCore.QThread):
     def _probe_frequency_sweep(self, frequency: float):
         quick_seconds = max(3.0, min(float(self.probe_seconds), 4.0))
         attempts = [
-            (frequency, "normal", quick_seconds),
-            (frequency - 12_500, "normal", quick_seconds),
-            (frequency + 12_500, "normal", quick_seconds),
-            (frequency, "conjugate", quick_seconds),
+            (frequency, "normal", 0.0, quick_seconds),
+            (frequency, "normal", -4_500.0, quick_seconds),
+            (frequency, "normal", 4_500.0, quick_seconds),
+            (frequency - 12_500, "normal", 0.0, quick_seconds),
+            (frequency + 12_500, "normal", 0.0, quick_seconds),
+            (frequency, "conjugate", 0.0, quick_seconds),
         ]
         best = None
         attempt_texts = []
-        for probe_frequency, iq_mode, seconds in attempts:
+        for probe_frequency, iq_mode, xlate_hz, seconds in attempts:
             if not self._running.is_set():
                 break
             result = self._probe_frequency(
                 probe_frequency,
                 iq_mode=iq_mode,
+                xlate_hz=xlate_hz,
                 probe_seconds=seconds,
             )
             attempt_texts.append(
-                f"{probe_frequency/1e6:.4f} MHz/{iq_mode}: {result.get('status')}"
+                f"{probe_frequency/1e6:.4f} MHz/{iq_mode}/{xlate_hz:+.0f} Hz: "
+                f"{result.get('status')}"
             )
             result["probe_frequency_hz"] = probe_frequency
             result["iq_mode"] = iq_mode
+            result["xlate_hz"] = xlate_hz
             if result.get("confirmed"):
                 result["details"] = (
                     f"{result.get('details', '')}; Prüfmitte "
-                    f"{probe_frequency/1e6:.4f} MHz, IQ {iq_mode}"
+                    f"{probe_frequency/1e6:.4f} MHz, IQ {iq_mode}, "
+                    f"Kanalversatz {xlate_hz:+.0f} Hz"
                 )
                 return result
             if result.get("status") in ("Fehler", "nicht geprüft", "abgebrochen"):
@@ -2287,6 +2328,7 @@ class TetraSignalSearchWorker(QtCore.QThread):
         self,
         frequency: float,
         iq_mode: str = "normal",
+        xlate_hz: float = 0.0,
         probe_seconds: float | None = None,
     ):
         if not self._windows_native_probe_available():
@@ -2311,6 +2353,13 @@ class TetraSignalSearchWorker(QtCore.QThread):
             with open(bits_path, "wb") as bits_out:
                 conv_env = _gnuradio_env_for(gnuradio_python)
                 conv_env["TETRA_IQ_MODE"] = iq_mode
+                channelizer_env = _gnuradio_env_for(gnuradio_python)
+                channelizer_env.update({
+                    "TETRA_XLATE_HZ": str(float(xlate_hz)),
+                    "TETRA_LOW_PASS": "12500",
+                    "TETRA_TRANSITION": "2500",
+                    "TETRA_OUT_RATE": "36000",
+                })
                 p1 = subprocess.Popen(
                     self._rtl_sdr_probe_cmd(frequency, seconds=probe_seconds),
                     stdout=subprocess.PIPE,
@@ -2329,17 +2378,28 @@ class TetraSignalSearchWorker(QtCore.QThread):
                 self._add_proc(pconv)
                 if p1.stdout:
                     p1.stdout.close()
+                pchan = subprocess.Popen(
+                    [gnuradio_python, "-u", "-c", _TETRA_CHANNELIZER_SCRIPT],
+                    stdin=pconv.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    env=channelizer_env,
+                    **_hidden_subprocess_kwargs(),
+                )
+                self._add_proc(pchan)
+                if pconv.stdout:
+                    pconv.stdout.close()
                 p2 = subprocess.Popen(
                     [gnuradio_python, demod_script],
-                    stdin=pconv.stdout,
+                    stdin=pchan.stdout,
                     stdout=bits_out,
                     stderr=subprocess.DEVNULL,
                     env=_gnuradio_env_for(gnuradio_python),
                     **_hidden_subprocess_kwargs(),
                 )
                 self._add_proc(p2)
-                if pconv.stdout:
-                    pconv.stdout.close()
+                if pchan.stdout:
+                    pchan.stdout.close()
 
                 active_seconds = max(1.0, float(probe_seconds or self.probe_seconds))
                 deadline = time.time() + max(5, active_seconds + 5)
@@ -2801,7 +2861,8 @@ class TetraDecoder(QtCore.QObject):
 
         self.output.emit(
             "Nutze Windows-kompatible Osmocom-TETRA Pipeline "
-            "(rtl_sdr -> u8/complex64-Konverter -> simdemod3.py -> tetra-rx)."
+            "(rtl_sdr -> u8/complex64-Konverter -> 25-kHz-Kanalfilter -> "
+            "simdemod3.py -> tetra-rx)."
         )
         self.output.emit(
             "Audioausgabe: mit der aktuellen Windows-Osmocom-Pipeline nicht verfügbar; "
@@ -2816,6 +2877,13 @@ class TetraDecoder(QtCore.QObject):
                 tmp.close()
 
                 with open(bits_path, "wb") as bits_out:
+                    channelizer_env = _gnuradio_env_for(gnuradio_python)
+                    channelizer_env.update({
+                        "TETRA_XLATE_HZ": "0",
+                        "TETRA_LOW_PASS": "12500",
+                        "TETRA_TRANSITION": "2500",
+                        "TETRA_OUT_RATE": "36000",
+                    })
                     p1 = subprocess.Popen(
                         self._rtl_sdr_cmd(frequency),
                         stdout=subprocess.PIPE,
@@ -2833,20 +2901,31 @@ class TetraDecoder(QtCore.QObject):
                     self._procs.append(pconv)
                     if p1.stdout:
                         p1.stdout.close()
+                    pchan = subprocess.Popen(
+                        [gnuradio_python, "-u", "-c", _TETRA_CHANNELIZER_SCRIPT],
+                        stdin=pconv.stdout,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        env=channelizer_env,
+                        **_hidden_subprocess_kwargs(),
+                    )
+                    self._procs.append(pchan)
+                    if pconv.stdout:
+                        pconv.stdout.close()
                     p2 = subprocess.Popen(
                         [gnuradio_python, demod_script],
-                        stdin=pconv.stdout,
+                        stdin=pchan.stdout,
                         stdout=bits_out,
                         stderr=subprocess.DEVNULL,
                         **_hidden_subprocess_kwargs(),
                     )
                     self._procs.append(p2)
-                    if pconv.stdout:
-                        pconv.stdout.close()
+                    if pchan.stdout:
+                        pchan.stdout.close()
 
                     deadline = time.time() + batch_seconds
                     while self._running.is_set() and time.time() < deadline:
-                        if any(proc.poll() is not None for proc in (p1, pconv, p2)):
+                        if any(proc.poll() is not None for proc in (p1, pconv, pchan, p2)):
                             break
                         time.sleep(0.1)
 
@@ -4318,6 +4397,17 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(dict)
     def _apply_ppm_calibration(self, result: dict):
         new_ppm = int(result.get("new_ppm", self.ppm_spin.value()))
+        ppm_delta = float(result.get("ppm_delta", new_ppm - self.ppm_spin.value()))
+        if abs(ppm_delta) > 25.0 or abs(new_ppm) > 50:
+            text = (
+                f"PPM-Kalibrierung verworfen: Ergebnis {new_ppm} ppm "
+                f"(Änderung {ppm_delta:+.1f} ppm) ist für die WFM-Referenz "
+                "unplausibel. Aktueller PPM-Wert bleibt erhalten."
+            )
+            self.calibration_status_label.setText(text)
+            self.log.appendPlainText(text)
+            self._refresh_dashboard_status()
+            return
         self.ppm_spin.setValue(new_ppm)
         warnung = f" ({result['warning']})" if result.get("warning") else ""
         text = (
