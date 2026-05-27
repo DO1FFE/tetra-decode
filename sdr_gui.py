@@ -582,6 +582,18 @@ handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
 
+ERSTELLUNGSJAHR = 2026
+
+
+def _copyright_text():
+    aktuelles_jahr = datetime.now().year
+    jahre = (
+        str(ERSTELLUNGSJAHR)
+        if aktuelles_jahr <= ERSTELLUNGSJAHR
+        else f"{ERSTELLUNGSJAHR} - {aktuelles_jahr}"
+    )
+    return f"© {jahre} Erik Schauer, do1ffe@darc.de"
+
 
 def list_sdr_devices():
     """Gibt eine Liste erkannter RTL-SDR-Geräte zurück."""
@@ -3024,11 +3036,18 @@ class MainWindow(QtWidgets.QMainWindow):
             "talkgroup_filter_enabled": False,
             "calibration_ref_mhz": 99.2,
             "calibration_search_khz": 180,
-            "calibrate_on_start": False,
+            "calibrate_on_start": True,
             "tetra_probe_all_candidates": True,
             "tetra_max_candidates": 0,
+            "audio_mode": "safe",
+            "record_audio": False,
+            "monitor_cycle_delay_sec": 5,
+            "ui_profile_version": 2,
         }
         self.config.update(load_config())
+        if int(self.config.get("ui_profile_version", 0) or 0) < 2:
+            self.config["calibrate_on_start"] = True
+            self.config["ui_profile_version"] = 2
         if abs(float(self.config.get("calibration_ref_mhz", 99.2)) - 421.0375) < 0.0001:
             self.config["calibration_ref_mhz"] = 99.2
         if int(self.config.get("calibration_search_khz", 180)) == 100:
@@ -3044,14 +3063,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.manual_lock = False
         self.tetra_signal_search = None
         self._signal_search_rows = {}
+        self._overview_signal_rows = {}
         self.calibration_worker = None
+        self.monitoring_active = False
+        self.monitor_timer = QtCore.QTimer(self)
+        self.monitor_timer.setSingleShot(True)
+        self.monitor_timer.timeout.connect(self._run_monitoring_cycle)
 
         self.tabs = QtWidgets.QTabWidget()
-        self._build_tabs()
+        self._build_modern_tabs()
 
         central = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(central)
+        lay.setContentsMargins(10, 10, 10, 6)
+        lay.setSpacing(6)
         lay.addWidget(self.tabs)
+        self.footer_label = QtWidgets.QLabel(_copyright_text())
+        self.footer_label.setObjectName("footerLabel")
+        self.footer_label.setAlignment(QtCore.Qt.AlignRight)
+        lay.addWidget(self.footer_label)
         self.setCentralWidget(central)
 
         self.scanner = SDRScanner(
@@ -3118,7 +3148,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.signal_search_table.itemDoubleClicked.connect(
             self._decode_signal_candidate_from_item
         )
+        self.overview_channel_table.itemDoubleClicked.connect(
+            self._decode_signal_candidate_from_item
+        )
+        self.overview_monitor_btn.toggled.connect(self._toggle_monitoring)
+        self.overview_search_btn.clicked.connect(self.start_tetra_signal_search)
+        self.overview_stop_search_btn.clicked.connect(self.stop_tetra_signal_search)
+        self.overview_decode_btn.clicked.connect(self.decode_selected_signal_candidate)
+        self.overview_calibrate_btn.clicked.connect(lambda: self.start_calibration("both"))
+        self.overview_start_scan_btn.clicked.connect(self.start)
+        self.overview_stop_btn.clicked.connect(self.stop)
+        self.audio_mode_combo.currentIndexChanged.connect(self._on_audio_mode_change)
         self.play_audio_cb.toggled.connect(self._toggle_dec_audio)
+        self.record_audio_cb.toggled.connect(
+            lambda checked: self.config.__setitem__("record_audio", bool(checked))
+        )
 
         self.theme_combo.currentIndexChanged.connect(self._on_theme_change)
         self.scheduler_enable_cb.toggled.connect(self.update_scheduler)
@@ -3137,6 +3181,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_ppm(self.ppm_spin.value())
         self._apply_gain_setting(self.config.get("gain", "max"))
         self._update_agc(self.agc_slider.value())
+        self.apply_theme(self.config.get("theme", "light"))
+        self._refresh_dashboard_status()
 
         self.freq_history = deque(maxlen=10)
         self.scan_results = {}
@@ -3190,6 +3236,419 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if self.config.get("calibrate_on_start", False):
             QtCore.QTimer.singleShot(1500, lambda: self.start_calibration("both"))
+
+    def _build_modern_tabs(self):
+        """Erstellt die moderne Hauptoberfläche."""
+
+        def standard_layout(widget):
+            layout = QtWidgets.QVBoxLayout(widget)
+            layout.setContentsMargins(16, 16, 16, 16)
+            layout.setSpacing(12)
+            return layout
+
+        def statuskarte(titel, wert, detail=""):
+            rahmen = QtWidgets.QFrame()
+            rahmen.setObjectName("statusCard")
+            rahmen.setFrameShape(QtWidgets.QFrame.StyledPanel)
+            layout = QtWidgets.QVBoxLayout(rahmen)
+            layout.setContentsMargins(14, 12, 14, 12)
+            layout.setSpacing(4)
+            titel_label = QtWidgets.QLabel(titel)
+            titel_label.setObjectName("statusTitle")
+            wert_label = QtWidgets.QLabel(wert)
+            wert_label.setObjectName("statusValue")
+            detail_label = QtWidgets.QLabel(detail)
+            detail_label.setObjectName("statusDetail")
+            detail_label.setWordWrap(True)
+            layout.addWidget(titel_label)
+            layout.addWidget(wert_label)
+            layout.addWidget(detail_label)
+            return rahmen, wert_label, detail_label
+
+        def richte_tabelle_ein(tabelle, stretch_spalte=None):
+            tabelle.setAlternatingRowColors(True)
+            tabelle.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+            tabelle.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+            tabelle.verticalHeader().setVisible(False)
+            tabelle.setShowGrid(False)
+            tabelle.setWordWrap(False)
+            tabelle.horizontalHeader().setHighlightSections(False)
+            if stretch_spalte is not None:
+                for spalte in range(tabelle.columnCount()):
+                    modus = (
+                        QtWidgets.QHeaderView.Stretch
+                        if spalte == stretch_spalte
+                        else QtWidgets.QHeaderView.ResizeToContents
+                    )
+                    tabelle.horizontalHeader().setSectionResizeMode(spalte, modus)
+
+        def aktionsknopf(text, icon=None, primaer=False):
+            knopf = QtWidgets.QPushButton(text)
+            if icon is not None:
+                knopf.setIcon(QtWidgets.QApplication.style().standardIcon(icon))
+            if primaer:
+                knopf.setProperty("klasse", "primaer")
+            return knopf
+
+        tab_overview = QtWidgets.QWidget()
+        overview_layout = standard_layout(tab_overview)
+        kopf = QtWidgets.QHBoxLayout()
+        titel_block = QtWidgets.QVBoxLayout()
+        titel = QtWidgets.QLabel("TETRA Decode")
+        titel.setObjectName("appTitle")
+        untertitel = QtWidgets.QLabel("SDR-Überwachung, Kanäle, Sprechgruppen und Audio")
+        untertitel.setObjectName("appSubtitle")
+        titel_block.addWidget(titel)
+        titel_block.addWidget(untertitel)
+        kopf.addLayout(titel_block)
+        kopf.addStretch()
+        self.overview_monitor_btn = aktionsknopf(
+            "Überwachung starten",
+            QtWidgets.QStyle.SP_MediaPlay,
+            primaer=True,
+        )
+        self.overview_monitor_btn.setCheckable(True)
+        kopf.addWidget(self.overview_monitor_btn)
+        overview_layout.addLayout(kopf)
+
+        status_grid = QtWidgets.QGridLayout()
+        status_grid.setSpacing(10)
+        (
+            geraet_card,
+            self.dashboard_device_value,
+            self.dashboard_device_detail,
+        ) = statuskarte("SDR-Gerät", "wird geprüft", "")
+        (
+            kal_card,
+            self.dashboard_calibration_value,
+            self.dashboard_calibration_detail,
+        ) = statuskarte("Kalibrierung", "bereit", "PPM und RF-Gain")
+        (
+            scan_card,
+            self.dashboard_scan_value,
+            self.dashboard_scan_detail,
+        ) = statuskarte("Überwachung", "gestoppt", "alle aktivierten Bereiche")
+        (
+            tetra_card,
+            self.dashboard_tetra_value,
+            self.dashboard_tetra_detail,
+        ) = statuskarte("TETRA", "0 bestätigt", "keine aktive Frequenz")
+        (
+            audio_card,
+            self.dashboard_audio_value,
+            self.dashboard_audio_detail,
+        ) = statuskarte("Audio", "wartet", "Modus: automatisch")
+        (
+            tg_card,
+            self.dashboard_talkgroup_value,
+            self.dashboard_talkgroup_detail,
+        ) = statuskarte("Sprechgruppen", "0", "keine Aktivität")
+        status_grid.addWidget(geraet_card, 0, 0)
+        status_grid.addWidget(kal_card, 0, 1)
+        status_grid.addWidget(scan_card, 0, 2)
+        status_grid.addWidget(tetra_card, 1, 0)
+        status_grid.addWidget(audio_card, 1, 1)
+        status_grid.addWidget(tg_card, 1, 2)
+        overview_layout.addLayout(status_grid)
+
+        actions = QtWidgets.QHBoxLayout()
+        self.overview_calibrate_btn = aktionsknopf("Kalibrieren", QtWidgets.QStyle.SP_BrowserReload)
+        self.overview_search_btn = aktionsknopf("Einmal suchen", QtWidgets.QStyle.SP_FileDialogContentsView)
+        self.overview_stop_search_btn = aktionsknopf("Suche stoppen", QtWidgets.QStyle.SP_MediaStop)
+        self.overview_decode_btn = aktionsknopf("Auswahl dekodieren", QtWidgets.QStyle.SP_MediaPlay)
+        self.overview_start_scan_btn = aktionsknopf("Spektrum starten", QtWidgets.QStyle.SP_MediaPlay)
+        self.overview_stop_btn = aktionsknopf("Alles stoppen", QtWidgets.QStyle.SP_MediaStop)
+        self.overview_stop_search_btn.setEnabled(False)
+        actions.addWidget(self.overview_calibrate_btn)
+        actions.addWidget(self.overview_search_btn)
+        actions.addWidget(self.overview_stop_search_btn)
+        actions.addWidget(self.overview_decode_btn)
+        actions.addStretch()
+        actions.addWidget(self.overview_start_scan_btn)
+        actions.addWidget(self.overview_stop_btn)
+        overview_layout.addLayout(actions)
+
+        self.overview_channel_table = QtWidgets.QTableWidget(0, 5)
+        self.overview_channel_table.setHorizontalHeaderLabels(
+            ["Frequenz", "Status", "Pegel", "Audio", "Letzte Sichtung"]
+        )
+        richte_tabelle_ein(self.overview_channel_table, stretch_spalte=1)
+        overview_layout.addWidget(self.overview_channel_table, 1)
+
+        tab_channels = QtWidgets.QWidget()
+        channel_layout = standard_layout(tab_channels)
+        kanal_toolbar = QtWidgets.QHBoxLayout()
+        self.tetra_start_btn = aktionsknopf(
+            "Dekodierung starten",
+            QtWidgets.QStyle.SP_MediaPlay,
+        )
+        self.tetra_start_btn.setEnabled(False)
+        self.tetra_stop_btn = aktionsknopf("Stopp", QtWidgets.QStyle.SP_MediaStop)
+        self.tetra_stop_btn.setEnabled(False)
+        self.tetra_auto_cb = QtWidgets.QCheckBox("Automatisch nach Scan")
+        self.tetra_search_btn = aktionsknopf("TETRA-Signale suchen", QtWidgets.QStyle.SP_FileDialogContentsView)
+        self.tetra_search_stop_btn = aktionsknopf("Suche stoppen", QtWidgets.QStyle.SP_MediaStop)
+        self.tetra_search_stop_btn.setEnabled(False)
+        self.decode_selected_signal_btn = aktionsknopf(
+            "Ausgewählte Frequenz dekodieren",
+            QtWidgets.QStyle.SP_MediaPlay,
+        )
+        kanal_toolbar.addWidget(self.tetra_start_btn)
+        kanal_toolbar.addWidget(self.tetra_stop_btn)
+        kanal_toolbar.addWidget(self.tetra_auto_cb)
+        kanal_toolbar.addStretch()
+        kanal_toolbar.addWidget(self.tetra_search_btn)
+        kanal_toolbar.addWidget(self.tetra_search_stop_btn)
+        kanal_toolbar.addWidget(self.decode_selected_signal_btn)
+        channel_layout.addLayout(kanal_toolbar)
+
+        suchoptionen_layout = QtWidgets.QHBoxLayout()
+        self.probe_all_candidates_cb = QtWidgets.QCheckBox("Alle gefundenen Kandidaten prüfen")
+        self.probe_all_candidates_cb.setChecked(
+            bool(self.config.get("tetra_probe_all_candidates", True))
+        )
+        self.max_candidates_spin = QtWidgets.QSpinBox()
+        self.max_candidates_spin.setRange(1, 500)
+        self.max_candidates_spin.setValue(
+            max(1, int(self.config.get("tetra_max_candidates", 10) or 10))
+        )
+        self.max_candidates_spin.setEnabled(not self.probe_all_candidates_cb.isChecked())
+        suchoptionen_layout.addWidget(self.probe_all_candidates_cb)
+        suchoptionen_layout.addWidget(QtWidgets.QLabel("Max. Kandidaten:"))
+        suchoptionen_layout.addWidget(self.max_candidates_spin)
+        suchoptionen_layout.addStretch()
+        channel_layout.addLayout(suchoptionen_layout)
+
+        self.signal_search_table = QtWidgets.QTableWidget(0, 5)
+        self.signal_search_table.setHorizontalHeaderLabels(
+            ["Frequenz", "Pegel", "Status", "Details", "Audio"]
+        )
+        richte_tabelle_ein(self.signal_search_table, stretch_spalte=3)
+        channel_layout.addWidget(self.signal_search_table, 2)
+        self.filter_edit = QtWidgets.QLineEdit()
+        self.filter_edit.setPlaceholderText("Regex-Filter")
+        channel_layout.addWidget(self.filter_edit)
+        self.tetra_output = QtWidgets.QPlainTextEdit()
+        self.tetra_output.setReadOnly(True)
+        self.tetra_output.setMaximumBlockCount(2000)
+        channel_layout.addWidget(self.tetra_output, 1)
+
+        tab_talkgroups = QtWidgets.QWidget()
+        talk_layout = standard_layout(tab_talkgroups)
+        auswahl_layout = QtWidgets.QHBoxLayout()
+        self.talkgroup_filter_cb = QtWidgets.QCheckBox("Nur ausgewählte anzeigen")
+        self.talkgroup_filter_cb.setChecked(
+            bool(self.config.get("talkgroup_filter_enabled", False))
+        )
+        self.talkgroup_select_all_btn = aktionsknopf("Alle auswählen")
+        self.talkgroup_select_none_btn = aktionsknopf("Auswahl löschen")
+        auswahl_layout.addWidget(self.talkgroup_filter_cb)
+        auswahl_layout.addStretch()
+        auswahl_layout.addWidget(self.talkgroup_select_all_btn)
+        auswahl_layout.addWidget(self.talkgroup_select_none_btn)
+        talk_layout.addLayout(auswahl_layout)
+        self.talkgroup_table = QtWidgets.QTableWidget(0, 5)
+        self.talkgroup_table.setHorizontalHeaderLabels(
+            ["Auswahl", "TG-ID/Adresse", "Frequenz", "Treffer", "Letzte Aktivität"]
+        )
+        richte_tabelle_ein(self.talkgroup_table, stretch_spalte=4)
+        talk_layout.addWidget(self.talkgroup_table)
+
+        tab_audio_data = QtWidgets.QWidget()
+        audio_data_layout = standard_layout(tab_audio_data)
+        audio_bar = QtWidgets.QHBoxLayout()
+        audio_bar.addWidget(QtWidgets.QLabel("Aktivität:"))
+        audio_bar.addWidget(self.activity_led)
+        audio_bar.addSpacing(16)
+        audio_bar.addWidget(QtWidgets.QLabel("Audio-Modus:"))
+        self.audio_mode_combo = QtWidgets.QComboBox()
+        self.audio_mode_combo.addItem("Nur unverschlüsselt", "safe")
+        self.audio_mode_combo.addItem("Immer versuchen", "always")
+        self.audio_mode_combo.addItem("Aus", "off")
+        audio_mode = str(self.config.get("audio_mode", "safe"))
+        audio_index = self.audio_mode_combo.findData(audio_mode)
+        self.audio_mode_combo.setCurrentIndex(audio_index if audio_index >= 0 else 0)
+        audio_bar.addWidget(self.audio_mode_combo)
+        self.play_audio_cb = QtWidgets.QCheckBox("Audio aktiv")
+        self.play_audio_cb.setChecked(self.audio_mode_combo.currentData() != "off")
+        audio_bar.addWidget(self.play_audio_cb)
+        self.record_audio_cb = QtWidgets.QCheckBox("als WAV speichern")
+        self.record_audio_cb.setChecked(bool(self.config.get("record_audio", False)))
+        audio_bar.addWidget(self.record_audio_cb)
+        audio_bar.addStretch()
+        self.audio_status_label = QtWidgets.QLabel("Audio-Status: wartet")
+        self.audio_status_label.setObjectName("audioStatus")
+        audio_bar.addWidget(self.audio_status_label)
+        audio_data_layout.addLayout(audio_bar)
+
+        self.decoder_data_table = QtWidgets.QTableWidget(0, 4)
+        self.decoder_data_table.setHorizontalHeaderLabels(
+            ["Zeit", "Frequenz", "Typ", "Inhalt"]
+        )
+        richte_tabelle_ein(self.decoder_data_table, stretch_spalte=3)
+        audio_data_layout.addWidget(self.decoder_data_table)
+
+        tab_network = QtWidgets.QWidget()
+        network_layout = standard_layout(tab_network)
+        network_split = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        zellen_widget = QtWidgets.QWidget()
+        zellen_layout = QtWidgets.QVBoxLayout(zellen_widget)
+        zellen_layout.setContentsMargins(0, 0, 0, 0)
+        self.cell_table = QtWidgets.QTableWidget(0, 5)
+        self.cell_table.setHorizontalHeaderLabels(
+            ["Zell-ID", "LAC", "MCC", "MNC", "Frequenz"]
+        )
+        richte_tabelle_ein(self.cell_table, stretch_spalte=4)
+        zellen_layout.addWidget(self.cell_table)
+        self.export_cells_btn = aktionsknopf("CSV-Export", QtWidgets.QStyle.SP_DialogSaveButton)
+        zellen_layout.addWidget(self.export_cells_btn, alignment=QtCore.Qt.AlignRight)
+        stats_widget = QtWidgets.QWidget()
+        stats_layout = QtWidgets.QVBoxLayout(stats_widget)
+        stats_layout.setContentsMargins(0, 0, 0, 0)
+        self.stats_canvas = FigureCanvas(Figure(figsize=(4, 3)))
+        self.stats_ax = self.stats_canvas.figure.add_subplot(111)
+        stats_layout.addWidget(self.stats_canvas)
+        network_split.addWidget(zellen_widget)
+        network_split.addWidget(stats_widget)
+        network_split.setSizes([260, 220])
+        network_layout.addWidget(network_split)
+
+        tab_spectrum = QtWidgets.QWidget()
+        spectrum_layout = standard_layout(tab_spectrum)
+        ctl_layout = QtWidgets.QHBoxLayout()
+        ctl_layout.addWidget(self.start_btn)
+        ctl_layout.addWidget(self.stop_btn)
+        ctl_layout.addWidget(self.freq_label)
+        ctl_layout.addStretch()
+        self.save_png_btn = aktionsknopf("PNG speichern", QtWidgets.QStyle.SP_DialogSaveButton)
+        ctl_layout.addWidget(self.save_png_btn)
+        self.manual_lock_btn = aktionsknopf("Modus: Automatisch")
+        self.manual_lock_btn.setCheckable(True)
+        ctl_layout.addWidget(self.manual_lock_btn)
+        spectrum_layout.addLayout(ctl_layout)
+        spectrum_layout.addWidget(self.canvas, 2)
+        spectrum_layout.addWidget(QtWidgets.QLabel("Letzte Frequenzen:"))
+        spectrum_layout.addWidget(self.freq_list, 1)
+        self.save_png_btn.clicked.connect(self.save_spectrum_png)
+        self.manual_lock_btn.toggled.connect(self._toggle_manual_lock)
+
+        tab_settings = QtWidgets.QWidget()
+        settings_layout = standard_layout(tab_settings)
+        settings_split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        links = QtWidgets.QWidget()
+        rechts = QtWidgets.QWidget()
+        f_links = QtWidgets.QFormLayout(links)
+        f_links.setLabelAlignment(QtCore.Qt.AlignRight)
+        f_rechts = QtWidgets.QFormLayout(rechts)
+        f_rechts.setLabelAlignment(QtCore.Qt.AlignRight)
+        dev_layout = QtWidgets.QHBoxLayout()
+        dev_layout.addWidget(self.device_box)
+        refresh = aktionsknopf("Neu suchen", QtWidgets.QStyle.SP_BrowserReload)
+        refresh.clicked.connect(self.refresh_devices)
+        dev_layout.addWidget(refresh)
+        f_links.addRow("Gerät:", dev_layout)
+        f_links.addRow("Frequenzbereich:", self.freq_range_box)
+        self.ppm_spin = QtWidgets.QSpinBox()
+        self.ppm_spin.setRange(-100, 100)
+        self.ppm_spin.setValue(self.config.get("ppm", 0))
+        f_links.addRow("PPM:", self.ppm_spin)
+
+        self.ref_freq_spin = QtWidgets.QDoubleSpinBox()
+        self.ref_freq_spin.setRange(24.0, 1800.0)
+        self.ref_freq_spin.setDecimals(4)
+        self.ref_freq_spin.setSingleStep(0.0125)
+        self.ref_freq_spin.setValue(float(self.config.get("calibration_ref_mhz", 99.2)))
+        self.ref_freq_spin.setSuffix(" MHz")
+        f_links.addRow("Referenzfrequenz:", self.ref_freq_spin)
+
+        self.cal_span_spin = QtWidgets.QSpinBox()
+        self.cal_span_spin.setRange(5, 500)
+        self.cal_span_spin.setValue(int(self.config.get("calibration_search_khz", 180)))
+        self.cal_span_spin.setSuffix(" kHz")
+        f_links.addRow("Suchbreite ±:", self.cal_span_spin)
+
+        kal_layout = QtWidgets.QHBoxLayout()
+        self.ppm_cal_btn = aktionsknopf("PPM berechnen")
+        self.gain_cal_btn = aktionsknopf("RF-Gain automatisch")
+        self.full_cal_btn = aktionsknopf("Start-Kalibrierung", QtWidgets.QStyle.SP_BrowserReload)
+        kal_layout.addWidget(self.ppm_cal_btn)
+        kal_layout.addWidget(self.gain_cal_btn)
+        kal_layout.addWidget(self.full_cal_btn)
+        f_links.addRow("Kalibrierung:", kal_layout)
+
+        self.calibrate_on_start_cb = QtWidgets.QCheckBox("beim Programmstart")
+        self.calibrate_on_start_cb.setChecked(
+            bool(self.config.get("calibrate_on_start", True))
+        )
+        self.calibration_status_label = QtWidgets.QLabel(
+            "Referenz: WDR 2 Essen 99,200 MHz"
+        )
+        start_cal_layout = QtWidgets.QHBoxLayout()
+        start_cal_layout.addWidget(self.calibrate_on_start_cb)
+        start_cal_layout.addWidget(self.calibration_status_label)
+        f_links.addRow("Auto-Kalibrierung:", start_cal_layout)
+
+        rf_gain_layout = QtWidgets.QHBoxLayout()
+        self.rf_gain_spin = QtWidgets.QDoubleSpinBox()
+        self.rf_gain_spin.setRange(0.0, 60.0)
+        self.rf_gain_spin.setDecimals(1)
+        self.rf_gain_spin.setSingleStep(0.5)
+        self.rf_gain_spin.setSuffix(" dB")
+        self.rf_gain_max_cb = QtWidgets.QCheckBox("max")
+        gain_setting = _normalize_gain_setting(self.config.get("gain", "max"))
+        self.rf_gain_max_cb.setChecked(gain_setting == "max")
+        self.rf_gain_spin.setEnabled(gain_setting != "max")
+        self.rf_gain_spin.setValue(_resolve_gain_value(gain_setting))
+        rf_gain_layout.addWidget(self.rf_gain_spin)
+        rf_gain_layout.addWidget(self.rf_gain_max_cb)
+        f_rechts.addRow("RF-Gain:", rf_gain_layout)
+
+        agc_layout = QtWidgets.QHBoxLayout()
+        agc_layout.addWidget(self.agc_slider)
+        agc_layout.addWidget(self.agc_value)
+        f_rechts.addRow("Audio-AGC-Ziel:", agc_layout)
+
+        self.theme_combo = QtWidgets.QComboBox()
+        self.theme_combo.addItem("Hell", "light")
+        self.theme_combo.addItem("Dunkel", "dark")
+        theme_value = self.config.get("theme", "light")
+        theme_index = 0 if theme_value == "light" else 1
+        self.theme_combo.setCurrentIndex(theme_index)
+        f_rechts.addRow("Design:", self.theme_combo)
+
+        self.scheduler_enable_cb = QtWidgets.QCheckBox("Scheduler aktiv")
+        self.scheduler_enable_cb.setChecked(self.config.get("scheduler_enabled", False))
+        self.scheduler_interval_spin = QtWidgets.QSpinBox()
+        self.scheduler_interval_spin.setRange(1, 1440)
+        self.scheduler_interval_spin.setValue(self.config.get("scheduler_interval", 15))
+        sch_lay = QtWidgets.QHBoxLayout()
+        sch_lay.addWidget(self.scheduler_enable_cb)
+        sch_lay.addWidget(QtWidgets.QLabel("Intervall (min):"))
+        sch_lay.addWidget(self.scheduler_interval_spin)
+        f_rechts.addRow("Scheduler:", sch_lay)
+
+        self.token_edit = QtWidgets.QLineEdit(self.config.get("telegram_token", ""))
+        self.chat_edit = QtWidgets.QLineEdit(self.config.get("telegram_chat", ""))
+        f_rechts.addRow("Telegram Token:", self.token_edit)
+        f_rechts.addRow("Chat-ID:", self.chat_edit)
+        settings_split.addWidget(links)
+        settings_split.addWidget(rechts)
+        settings_split.setSizes([520, 520])
+        settings_layout.addWidget(settings_split)
+
+        tab_log = QtWidgets.QWidget()
+        log_layout = standard_layout(tab_log)
+        self.log.setMaximumBlockCount(5000)
+        log_layout.addWidget(self.log)
+
+        self.tabs.addTab(tab_overview, "Übersicht")
+        self.tabs.addTab(tab_channels, "Kanäle")
+        self.tabs.addTab(tab_talkgroups, "Sprechgruppen")
+        self.tabs.addTab(tab_audio_data, "Audio & Daten")
+        self.tabs.addTab(tab_network, "Netz")
+        self.tabs.addTab(tab_spectrum, "Spektrum")
+        self.tabs.addTab(tab_settings, "Einstellungen")
+        self.tabs.addTab(tab_log, "Log")
 
     def _build_tabs(self):
         """Erstellt die Haupt-Tabs inklusive TETRA-Dekodierung."""
@@ -3487,6 +3946,177 @@ class MainWindow(QtWidgets.QMainWindow):
         self.device_box.clear()
         for label, device_id in list_sdr_devices():
             self.device_box.addItem(label, device_id)
+        self._refresh_dashboard_status()
+
+    def _audio_mode(self):
+        if not hasattr(self, "audio_mode_combo"):
+            return str(self.config.get("audio_mode", "safe"))
+        return str(self.audio_mode_combo.currentData() or "safe")
+
+    def _audio_mode_text(self):
+        modus = self._audio_mode()
+        if modus == "always":
+            return "immer versuchen"
+        if modus == "off":
+            return "aus"
+        return "nur unverschlüsselt"
+
+    def _on_audio_mode_change(self, _index: int):
+        modus = self._audio_mode()
+        self.config["audio_mode"] = modus
+        if hasattr(self, "play_audio_cb"):
+            aktiv = modus != "off"
+            if self.play_audio_cb.isChecked() != aktiv:
+                self.play_audio_cb.blockSignals(True)
+                self.play_audio_cb.setChecked(aktiv)
+                self.play_audio_cb.blockSignals(False)
+        self._refresh_dashboard_status()
+
+    def _set_audio_mode(self, modus: str):
+        if not hasattr(self, "audio_mode_combo"):
+            self.config["audio_mode"] = modus
+            return
+        index = self.audio_mode_combo.findData(modus)
+        if index < 0:
+            index = 0
+        self.audio_mode_combo.setCurrentIndex(index)
+
+    def _refresh_dashboard_status(self):
+        if not hasattr(self, "dashboard_device_value"):
+            return
+        name, device_id = self._current_device_info()
+        if name:
+            self.dashboard_device_value.setText(name)
+            detail = f"Index {device_id}" if device_id is not None else "ohne festen Index"
+            self.dashboard_device_detail.setText(detail)
+        else:
+            self.dashboard_device_value.setText("kein Gerät")
+            self.dashboard_device_detail.setText("RTL-SDR nicht erkannt")
+
+        ppm_text = f"PPM {self.config.get('ppm', 0)}"
+        gain_text = _normalize_gain_setting(self.config.get("gain", "max"))
+        if gain_text == "max":
+            gain_text = "Gain max"
+        else:
+            gain_text = f"Gain {float(gain_text):.1f} dB"
+        self.dashboard_calibration_value.setText(ppm_text)
+        self.dashboard_calibration_detail.setText(gain_text)
+
+        suche_laeuft = bool(
+            self.tetra_signal_search and self.tetra_signal_search.isRunning()
+        )
+        if self.monitoring_active:
+            scan_text = "läuft dauerhaft"
+        elif suche_laeuft:
+            scan_text = "Suche läuft"
+        elif hasattr(self, "scanner") and self.scanner._running.is_set():
+            scan_text = "Spektrum läuft"
+        else:
+            scan_text = "gestoppt"
+        self.dashboard_scan_value.setText(scan_text)
+        self.dashboard_scan_detail.setText(self.freq_range_box.currentText())
+
+        bestaetigt = 0
+        if hasattr(self, "overview_channel_table"):
+            for row in range(self.overview_channel_table.rowCount()):
+                status_item = self.overview_channel_table.item(row, 1)
+                if status_item and "bestätigt" in status_item.text():
+                    bestaetigt += 1
+        self.dashboard_tetra_value.setText(f"{bestaetigt} bestätigt")
+        if hasattr(self, "current_frequency") and self.current_frequency is not None:
+            self.dashboard_tetra_detail.setText(f"{self.current_frequency/1e6:.4f} MHz")
+        else:
+            self.dashboard_tetra_detail.setText("keine aktive Frequenz")
+
+        status = self.audio_status_label.text().replace("Audio-Status:", "").strip()
+        self.dashboard_audio_value.setText(status or "wartet")
+        self.dashboard_audio_detail.setText(f"Modus: {self._audio_mode_text()}")
+
+        talkgroups = getattr(self, "talkgroups", {})
+        selected_talkgroups = getattr(self, "selected_talkgroups", set())
+        self.dashboard_talkgroup_value.setText(str(len(talkgroups)))
+        if selected_talkgroups:
+            self.dashboard_talkgroup_detail.setText(
+                f"{len(selected_talkgroups)} ausgewählt"
+            )
+        else:
+            self.dashboard_talkgroup_detail.setText("alle anzeigen")
+
+    def _upsert_overview_candidate(self, info: dict):
+        if not hasattr(self, "overview_channel_table"):
+            return
+        freq = float(info.get("frequency_hz") or 0)
+        if freq <= 0:
+            return
+        key = int(round(freq))
+        row = self._overview_signal_rows.get(key)
+        if row is None:
+            row = self.overview_channel_table.rowCount()
+            self.overview_channel_table.insertRow(row)
+            self._overview_signal_rows[key] = row
+
+        status = str(info.get("status", ""))
+        werte = [
+            f"{freq/1e6:.4f} MHz",
+            status,
+            f"{float(info.get('power', 0.0)):.1f} dB",
+            str(info.get("audio", "")),
+            datetime.now().strftime("%H:%M:%S"),
+        ]
+        farbe = None
+        if status == "bestätigt":
+            farbe = QtGui.QColor("#d9f7df")
+        elif status in ("unklar", "möglich"):
+            farbe = QtGui.QColor("#fff4c4")
+        elif status in ("Fehler", "kein TETRA"):
+            farbe = QtGui.QColor("#f8d7da")
+        for spalte, wert in enumerate(werte):
+            item = QtWidgets.QTableWidgetItem(wert)
+            if spalte == 0:
+                item.setData(QtCore.Qt.UserRole, freq)
+            if farbe is not None:
+                item.setBackground(farbe)
+            self.overview_channel_table.setItem(row, spalte, item)
+        self._refresh_dashboard_status()
+
+    def _toggle_monitoring(self, enabled: bool):
+        if enabled:
+            self.start_monitoring()
+        else:
+            self.stop_monitoring()
+
+    def start_monitoring(self):
+        if self.monitoring_active:
+            return
+        self.monitoring_active = True
+        self.overview_monitor_btn.setText("Überwachung stoppen")
+        self.log.appendPlainText("Dauerhafte TETRA-Überwachung gestartet.")
+        self._refresh_dashboard_status()
+        self._run_monitoring_cycle()
+
+    def stop_monitoring(self):
+        if not self.monitoring_active and not self.monitor_timer.isActive():
+            return
+        self.monitoring_active = False
+        self.monitor_timer.stop()
+        if hasattr(self, "overview_monitor_btn"):
+            self.overview_monitor_btn.blockSignals(True)
+            self.overview_monitor_btn.setChecked(False)
+            self.overview_monitor_btn.setText("Überwachung starten")
+            self.overview_monitor_btn.blockSignals(False)
+        self.stop_tetra_signal_search(wait=False)
+        self.log.appendPlainText("Dauerhafte TETRA-Überwachung gestoppt.")
+        self._refresh_dashboard_status()
+
+    def _run_monitoring_cycle(self):
+        if not self.monitoring_active:
+            return
+        if self.calibration_worker and self.calibration_worker.isRunning():
+            self.monitor_timer.start(2000)
+            return
+        if self.tetra_signal_search and self.tetra_signal_search.isRunning():
+            return
+        self.start_tetra_signal_search()
 
     def _current_device_info(self):
         name = self.device_box.currentText()
@@ -3509,9 +4139,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scanner.ppm = value
         self.player.ppm = value
         self.decoder.ppm = value
+        self._refresh_dashboard_status()
 
     def _on_freq_range_change(self, _index: int):
         self.config["freq_range_label"] = self.freq_range_box.currentText()
+        self._refresh_dashboard_status()
 
     def _on_probe_all_candidates_change(self, enabled: bool):
         self.max_candidates_spin.setEnabled(not enabled)
@@ -3527,6 +4159,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.player.gain = gain_setting
         if hasattr(self, "decoder"):
             self.decoder.gain = gain_setting
+        self._refresh_dashboard_status()
 
     def _update_rf_gain(self, value: float):
         if self.rf_gain_max_cb.isChecked():
@@ -3552,6 +4185,7 @@ class MainWindow(QtWidgets.QMainWindow):
         reference_hz = float(self.ref_freq_spin.value()) * 1e6
         search_span_hz = float(self.cal_span_spin.value()) * 1e3
         self.calibration_status_label.setText("Kalibrierung läuft...")
+        self._refresh_dashboard_status()
         self.log.appendPlainText(
             f"Kalibrierung mit Gerät {name} auf {reference_hz/1e6:.4f} MHz."
         )
@@ -3592,6 +4226,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.calibration_status_label.setText(text)
         self.log.appendPlainText(text)
+        self._refresh_dashboard_status()
 
     @QtCore.pyqtSlot(dict)
     def _apply_gain_calibration(self, result: dict):
@@ -3611,12 +4246,14 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.calibration_status_label.setText(text)
         self.log.appendPlainText(text)
+        self._refresh_dashboard_status()
 
     @QtCore.pyqtSlot()
     def _calibration_finished(self):
         if self.calibration_status_label.text() == "Kalibrierung läuft...":
             self.calibration_status_label.setText("Kalibrierung beendet.")
         self.calibration_worker = None
+        self._refresh_dashboard_status()
 
     @QtCore.pyqtSlot(np.ndarray, np.ndarray)
     def _update_scan_results(self, freqs, powers):
@@ -3689,6 +4326,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tetra_start_btn.setEnabled(True)
         if self.tetra_auto_cb.isChecked():
             self.start_decoding()
+        self._refresh_dashboard_status()
 
     def _set_manual_lock(self, enabled: bool):
         self.manual_lock = enabled
@@ -3725,10 +4363,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tetra_stop_btn.setEnabled(True)
         self.tetra_output.clear()
         rec = self.record_audio_cb.isChecked()
-        if self.play_audio_cb.isChecked() and self.decoder.audio_output_supported():
+        audio_mode = self._audio_mode()
+        audio_requested = audio_mode != "off" and self.play_audio_cb.isChecked()
+        if audio_requested and self.decoder.audio_output_supported():
             self.dec_audio_player.start(record=rec)
-            self.audio_status_label.setText("Audio-Status: Wiedergabe aktiv")
-        elif self.play_audio_cb.isChecked():
+            if audio_mode == "always":
+                self.audio_status_label.setText("Audio-Status: Wiedergabe aktiv")
+            else:
+                self.audio_status_label.setText("Audio-Status: wartet auf unverschlüsselte Sprache")
+        elif audio_requested:
             self.audio_status_label.setText(
                 "Audio-Status: keine audiofähige Decoder-Kette verfügbar"
             )
@@ -3738,6 +4381,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         else:
             self.audio_status_label.setText("Audio-Status: ausgeschaltet")
+        self._refresh_dashboard_status()
         if device_id is None:
             device_text = "ohne Index"
         else:
@@ -3753,6 +4397,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.decoder.stop()
         self.dec_audio_player.stop()
         self.audio_status_label.setText("Audio-Status: gestoppt")
+        self._refresh_dashboard_status()
 
     def start_tetra_signal_search(self):
         """Sucht echte TETRA-Signale und prüft Kandidaten mit dem Dekoder."""
@@ -3822,6 +4467,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def _set_signal_search_buttons(self, running: bool):
         self.tetra_search_btn.setEnabled(not running)
         self.tetra_search_stop_btn.setEnabled(running)
+        if hasattr(self, "overview_search_btn"):
+            self.overview_search_btn.setEnabled(not running)
+        if hasattr(self, "overview_stop_search_btn"):
+            self.overview_stop_search_btn.setEnabled(running)
+        self._refresh_dashboard_status()
 
     @QtCore.pyqtSlot(str)
     def _append_signal_search_log(self, text: str):
@@ -3831,6 +4481,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(dict)
     def _upsert_signal_candidate(self, info: dict):
+        self._upsert_overview_candidate(info)
         freq = float(info.get("frequency_hz") or 0)
         if freq <= 0:
             return
@@ -3879,6 +4530,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.log.appendPlainText(
                     f"TETRA-Signal bestätigt auf {freq/1e6:.4f} MHz."
                 )
+        self._refresh_dashboard_status()
 
     @QtCore.pyqtSlot()
     def _tetra_signal_search_finished(self):
@@ -3886,13 +4538,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.appendPlainText("TETRA-Signalsuche beendet.")
         self.tetra_output.appendPlainText("TETRA-Signalsuche beendet.")
         self.tetra_signal_search = None
+        if self.monitoring_active:
+            delay_ms = int(self.config.get("monitor_cycle_delay_sec", 5)) * 1000
+            self.monitor_timer.start(max(1000, delay_ms))
+        self._refresh_dashboard_status()
 
     def _selected_signal_candidate(self):
         row = self.signal_search_table.currentRow()
+        tabelle = self.signal_search_table
+        status_spalte = 2
+        if row < 0 and hasattr(self, "overview_channel_table"):
+            row = self.overview_channel_table.currentRow()
+            tabelle = self.overview_channel_table
+            status_spalte = 1
         if row < 0:
             return None
-        freq_item = self.signal_search_table.item(row, 0)
-        status_item = self.signal_search_table.item(row, 2)
+        freq_item = tabelle.item(row, 0)
+        status_item = tabelle.item(row, status_spalte)
         if not freq_item:
             return None
         freq = freq_item.data(QtCore.Qt.UserRole)
@@ -3905,7 +4567,13 @@ class MainWindow(QtWidgets.QMainWindow):
         return float(freq), status
 
     @QtCore.pyqtSlot(QtWidgets.QTableWidgetItem)
-    def _decode_signal_candidate_from_item(self, _item):
+    def _decode_signal_candidate_from_item(self, item):
+        if hasattr(self, "overview_channel_table") and item.tableWidget() is self.overview_channel_table:
+            self.signal_search_table.clearSelection()
+            self.signal_search_table.setCurrentCell(-1, -1)
+        elif item.tableWidget() is self.signal_search_table and hasattr(self, "overview_channel_table"):
+            self.overview_channel_table.clearSelection()
+            self.overview_channel_table.setCurrentCell(-1, -1)
         self.decode_selected_signal_candidate()
 
     def decode_selected_signal_candidate(self):
@@ -3915,6 +4583,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log.appendPlainText("Bitte zuerst eine Frequenz aus der Signalsuche markieren.")
             return
         freq, status = selected
+        self.stop_monitoring()
         self.stop_tetra_signal_search(wait=True)
         self._set_manual_lock(True)
         self.freq_label.setText(f"Frequenz: {freq/1e6:.3f} MHz")
@@ -3930,17 +4599,24 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log.appendPlainText(
                 f"Bestätigte TETRA-Frequenz übernommen: {freq/1e6:.4f} MHz."
             )
+        self._refresh_dashboard_status()
         self.start_decoding()
 
     def _toggle_dec_audio(self, enabled: bool):
+        if enabled and self._audio_mode() == "off":
+            self._set_audio_mode("safe")
+        elif not enabled and self._audio_mode() != "off":
+            self._set_audio_mode("off")
         if enabled and self.decoder._running.is_set():
             self.dec_audio_player.start(record=self.record_audio_cb.isChecked())
         else:
             self.dec_audio_player.stop()
+        self._refresh_dashboard_status()
 
     def _encrypted_signal(self):
         self.dec_audio_player.stop()
         self.audio_status_label.setText("Audio-Status: Signal verschlüsselt")
+        self._refresh_dashboard_status()
         QtWidgets.QMessageBox.information(self, "Info", "Verschl\u00fcsseltes Signal erkannt")
 
     def _append_tetra(self, line: str):
@@ -3958,6 +4634,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._append_decoder_data(line)
         if line.startswith("Audioausgabe:"):
             self.audio_status_label.setText(f"Audio-Status: {line.split(':', 1)[1].strip()}")
+            self._refresh_dashboard_status()
         self.parse_cell_info(line)
         self.parse_network_info(line)
         self.parse_packet_type(line)
@@ -3968,6 +4645,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tetra_stop_btn.setEnabled(False)
         self.dec_audio_player.stop()
         self.audio_status_label.setText("Audio-Status: Dekoder gestoppt")
+        self._refresh_dashboard_status()
 
     def start(self):
         self.stop_calibration(wait=True)
@@ -3995,14 +4673,17 @@ class MainWindow(QtWidgets.QMainWindow):
             f"({f_start/1e6:.0f}-{f_end/1e6:.0f} MHz)"
         )
         self.scanner.start(f_start, f_end)
+        self._refresh_dashboard_status()
 
     def stop(self):
         self.log.appendPlainText("Stoppe")
+        self.stop_monitoring()
         self.stop_calibration(wait=True)
         self.stop_tetra_signal_search(wait=True)
         self.scanner.stop()
         self.player.stop()
         self.stop_decoding()
+        self._refresh_dashboard_status()
 
     def closeEvent(self, event):
         self.stop_calibration(wait=True)
@@ -4022,6 +4703,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.config["calibration_ref_mhz"] = float(self.ref_freq_spin.value())
         self.config["calibration_search_khz"] = int(self.cal_span_spin.value())
         self.config["calibrate_on_start"] = bool(self.calibrate_on_start_cb.isChecked())
+        self.config["audio_mode"] = self._audio_mode()
+        self.config["record_audio"] = bool(self.record_audio_cb.isChecked())
+        self.config["ui_profile_version"] = 2
         self.config["tetra_probe_all_candidates"] = bool(
             self.probe_all_candidates_cb.isChecked()
         )
@@ -4031,11 +4715,121 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.config["gain"] = float(self.rf_gain_spin.value())
 
+    def _modern_light_stylesheet(self):
+        return """
+        QMainWindow, QWidget {
+            background: #f5f7fa;
+            color: #17202a;
+            font-size: 10.5pt;
+        }
+        QTabWidget::pane {
+            border: 1px solid #ccd5df;
+            background: #ffffff;
+            top: -1px;
+        }
+        QTabBar::tab {
+            background: #e8edf2;
+            color: #243447;
+            border: 1px solid #ccd5df;
+            padding: 8px 14px;
+            margin-right: 2px;
+            min-width: 92px;
+        }
+        QTabBar::tab:selected {
+            background: #ffffff;
+            border-bottom-color: #ffffff;
+            color: #0b5cad;
+        }
+        QLabel#appTitle {
+            font-size: 22pt;
+            font-weight: 700;
+            color: #0f2437;
+        }
+        QLabel#appSubtitle {
+            color: #607080;
+            font-size: 10pt;
+        }
+        QFrame#statusCard {
+            background: #ffffff;
+            border: 1px solid #d9e1ea;
+            border-radius: 8px;
+        }
+        QLabel#statusTitle {
+            color: #607080;
+            font-size: 9pt;
+        }
+        QLabel#statusValue {
+            color: #102030;
+            font-size: 16pt;
+            font-weight: 700;
+        }
+        QLabel#statusDetail {
+            color: #607080;
+            font-size: 9pt;
+        }
+        QPushButton {
+            background: #ffffff;
+            border: 1px solid #b7c2cf;
+            border-radius: 6px;
+            padding: 7px 11px;
+        }
+        QPushButton:hover {
+            border-color: #3c7dc4;
+            background: #f2f7fd;
+        }
+        QPushButton:pressed {
+            background: #dceafa;
+        }
+        QPushButton:disabled {
+            color: #8b98a8;
+            background: #edf1f5;
+        }
+        QPushButton[klasse="primaer"] {
+            color: #ffffff;
+            background: #0b5cad;
+            border-color: #0b5cad;
+            font-weight: 700;
+        }
+        QPushButton[klasse="primaer"]:checked {
+            background: #b73d2f;
+            border-color: #b73d2f;
+        }
+        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
+            background: #ffffff;
+            border: 1px solid #c5cfda;
+            border-radius: 5px;
+            padding: 5px;
+        }
+        QTableWidget {
+            background: #ffffff;
+            alternate-background-color: #f7f9fb;
+            border: 1px solid #d3dce6;
+            selection-background-color: #cfe5ff;
+            selection-color: #102030;
+        }
+        QHeaderView::section {
+            background: #edf2f7;
+            border: 0;
+            border-right: 1px solid #d3dce6;
+            border-bottom: 1px solid #d3dce6;
+            padding: 7px;
+            font-weight: 700;
+        }
+        QLabel#audioStatus {
+            color: #0b5cad;
+            font-weight: 700;
+        }
+        QLabel#footerLabel {
+            color: #7a8795;
+            font-size: 8.5pt;
+        }
+        """
+
     def apply_theme(self, theme: str):
         if theme == "dark" and qdarkstyle:
             self.setStyleSheet(qdarkstyle.load_stylesheet_pyqt5())
         else:
-            self.setStyleSheet("")
+            self.setStyleSheet(self._modern_light_stylesheet())
         self.config["theme"] = theme
 
     def _on_theme_change(self, index: int):
@@ -4203,6 +4997,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 info["freq"] = f"{self.current_frequency/1e6:.4f} MHz"
             self.talkgroups[tg_id] = info
         self._update_talkgroups_table()
+        self._refresh_dashboard_status()
 
     def _extract_talkgroup_ids(self, line: str):
         return extract_talkgroup_ids(line)
@@ -4252,6 +5047,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.selected_talkgroups.discard(tg_id)
         self._persist_selected_talkgroups_to_config()
+        self._refresh_dashboard_status()
 
     def _set_all_talkgroup_selection(self, selected: bool):
         ids = {str(tg_id) for tg_id in self.talkgroups.keys()}
@@ -4261,11 +5057,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.selected_talkgroups = set()
         self._persist_selected_talkgroups_to_config()
         self._update_talkgroups_table()
+        self._refresh_dashboard_status()
 
     def _on_talkgroup_filter_change(self, enabled: bool):
         self.config["talkgroup_filter_enabled"] = bool(enabled)
         status = "aktiv" if enabled else "aus"
         self.log.appendPlainText(f"Sprechgruppen-Filter {status}.")
+        self._refresh_dashboard_status()
 
     def _line_matches_selected_talkgroup(self, line: str) -> bool:
         filter_enabled = (
