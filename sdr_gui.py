@@ -489,6 +489,10 @@ TETRA_SCAN_BIN_HZ = 12_500
 TETRA_CHANNEL_RASTER_HZ = 12_500
 
 
+class RtlSdrStreamError(RuntimeError):
+    """Signalisiert, dass RTL-SDR zwar startet, aber keine IQ-Daten liefert."""
+
+
 def _terminate_process_list(procs):
     for proc in procs:
         if proc and proc.poll() is None:
@@ -506,6 +510,19 @@ def _terminate_process_list(procs):
                 proc.kill()
             except Exception:
                 pass
+
+
+def _kurzer_prozessfehler(stderr_data) -> str:
+    if not stderr_data:
+        return ""
+    if isinstance(stderr_data, bytes):
+        text = stderr_data.decode("utf-8", errors="replace")
+    else:
+        text = str(stderr_data)
+    zeilen = [zeile.strip() for zeile in text.splitlines() if zeile.strip()]
+    if not zeilen:
+        return ""
+    return " Details: " + " | ".join(zeilen[-5:])
 
 
 def _tetra_line_indicates_encryption(line: str) -> bool:
@@ -987,13 +1004,15 @@ def _capture_rtl_sdr_iq(
         cmd.extend(["-d", str(device_id)])
     cmd.append("-")
     proc = None
-    timeout_seconds = max(8.0, float(seconds) + 8.0)
+    timeout_seconds = max(3.0, float(seconds) + 3.0)
     deadline = time.time() + timeout_seconds
+    raw = b""
+    stderr_data = b""
     try:
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             **_hidden_subprocess_kwargs(),
         )
         if proc_callback:
@@ -1005,23 +1024,32 @@ def _capture_rtl_sdr_iq(
                 raise RuntimeError("rtl_sdr-Aufnahme abgebrochen.")
             remaining = max(0.05, min(0.25, deadline - time.time()))
             try:
-                raw, _ = proc.communicate(timeout=remaining)
+                raw, stderr_data = proc.communicate(timeout=remaining)
                 break
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as exc:
                 if time.time() >= deadline:
                     _terminate_process_list([proc])
-                    raise RuntimeError(
-                        f"rtl_sdr-Aufnahme fehlgeschlagen: Timeout nach "
-                        f"{timeout_seconds:.1f} Sekunden."
+                    try:
+                        raw, stderr_data = proc.communicate(timeout=1)
+                    except Exception:
+                        raw = exc.output or b""
+                        stderr_data = exc.stderr or b""
+                    raise RtlSdrStreamError(
+                        "rtl_sdr liefert keine IQ-Daten "
+                        f"(Timeout nach {timeout_seconds:.1f} Sekunden)."
+                        + _kurzer_prozessfehler(stderr_data)
                     )
-    except RuntimeError:
+    except RtlSdrStreamError:
         raise
     except Exception as exc:
         if proc and proc.poll() is None:
             _terminate_process_list([proc])
         raise RuntimeError(f"rtl_sdr-Aufnahme fehlgeschlagen: {exc}") from exc
     if len(raw) < 4096:
-        raise RuntimeError(f"rtl_sdr lieferte zu wenige IQ-Daten ({len(raw)} Byte).")
+        raise RtlSdrStreamError(
+            f"rtl_sdr lieferte zu wenige IQ-Daten ({len(raw)} Byte)."
+            + _kurzer_prozessfehler(stderr_data)
+        )
     return raw
 
 
@@ -1957,6 +1985,7 @@ class CalibrationWorker(QtCore.QThread):
     """Berechnet PPM und RF-Gain anhand eines bekannten Referenzsignals."""
 
     log = QtCore.pyqtSignal(str)
+    error = QtCore.pyqtSignal(str)
     ppm_ready = QtCore.pyqtSignal(dict)
     gain_ready = QtCore.pyqtSignal(dict)
 
@@ -1980,6 +2009,7 @@ class CalibrationWorker(QtCore.QThread):
         self._running = threading.Event()
         self._procs = []
         self._proc_lock = threading.RLock()
+        self._stream_error = None
 
     def stop(self):
         self._running.clear()
@@ -1997,9 +2027,10 @@ class CalibrationWorker(QtCore.QThread):
 
     def run(self):
         self._running.set()
+        self._stream_error = None
         try:
             if not shutil.which("rtl_sdr"):
-                self.log.emit("rtl_sdr nicht gefunden; Kalibrierung nicht möglich.")
+                self.error.emit("rtl_sdr nicht gefunden; Kalibrierung nicht möglich.")
                 return
 
             gain_for_ppm = self.gain
@@ -2014,11 +2045,21 @@ class CalibrationWorker(QtCore.QThread):
                     self.gain_ready.emit(gain_result)
 
             if self.mode in ("ppm", "both") and self._running.is_set():
+                if self._stream_error:
+                    self.log.emit(
+                        "PPM-Kalibrierung übersprungen, weil der RTL-SDR keine "
+                        "IQ-Daten liefert."
+                    )
+                    return
                 try:
                     self._auto_ppm(gain_for_ppm)
+                except RtlSdrStreamError as exc:
+                    if self._running.is_set():
+                        self._stream_error = str(exc)
+                        self.error.emit(self._rtl_stream_error_text(exc))
                 except Exception as exc:
                     if self._running.is_set():
-                        self.log.emit(f"PPM-Kalibrierung fehlgeschlagen: {exc}")
+                        self.error.emit(f"PPM-Kalibrierung fehlgeschlagen: {exc}")
         finally:
             self._running.clear()
             self._terminate_processes()
@@ -2059,7 +2100,7 @@ class CalibrationWorker(QtCore.QThread):
             gains = [gains[int(index)] for index in indices]
 
         self.log.emit(
-            f"RF-Gain-Automatik auf {self.reference_hz/1e6:.4f} MHz testet "
+            f"RF-Gain-Automatik auf {self.reference_hz/1e6:.4f} MHz testet bis zu "
             f"{len(gains)} Stufen..."
         )
         best = None
@@ -2079,6 +2120,10 @@ class CalibrationWorker(QtCore.QThread):
                     stop_event=self._running,
                     proc_callback=self._add_proc,
                 )
+            except RtlSdrStreamError as exc:
+                self._stream_error = str(exc)
+                self.error.emit(self._rtl_stream_error_text(exc))
+                return None
             except Exception as exc:
                 self.log.emit(f"Gain {gain:.1f} dB konnte nicht gemessen werden: {exc}")
                 continue
@@ -2107,6 +2152,15 @@ class CalibrationWorker(QtCore.QThread):
 
     def _tune_offset_hz(self):
         return min(250_000.0, max(50_000.0, float(self.search_span_hz) * 1.5))
+
+    @staticmethod
+    def _rtl_stream_error_text(exc):
+        return (
+            "RTL-SDR liefert keine IQ-Daten. Kalibrierung abgebrochen. "
+            "Bitte Stick kurz abziehen/einstecken, USB-Port wechseln und mit Zadig "
+            "WinUSB für Bulk-In Interface 0 prüfen. "
+            f"Technik: {exc}"
+        )
 
 
 class SDRScanner(QtCore.QObject):
@@ -3594,6 +3648,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._signal_search_rows = {}
         self._overview_signal_rows = {}
         self.calibration_worker = None
+        self._calibration_failed = False
         self._closing = False
         self.monitoring_active = False
         self.monitor_timer = QtCore.QTimer(self)
@@ -4949,6 +5004,7 @@ class MainWindow(QtWidgets.QMainWindow):
         name, device_id = self._current_device_info()
         reference_hz = float(self.ref_freq_spin.value()) * 1e6
         search_span_hz = float(self.cal_span_spin.value()) * 1e3
+        self._calibration_failed = False
         self.calibration_status_label.setText("Kalibrierung läuft...")
         self._refresh_dashboard_status()
         self.log.appendPlainText(
@@ -4965,6 +5021,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         worker.log.connect(self.log.appendPlainText)
         worker.log.connect(logger.info)
+        worker.error.connect(self._calibration_error)
         worker.ppm_ready.connect(self._apply_ppm_calibration)
         worker.gain_ready.connect(self._apply_gain_calibration)
         worker.finished.connect(self._calibration_finished)
@@ -4986,6 +5043,16 @@ class MainWindow(QtWidgets.QMainWindow):
                     pass
                 worker.terminate()
                 worker.wait(3000)
+
+    @QtCore.pyqtSlot(str)
+    def _calibration_error(self, text: str):
+        if self._closing:
+            return
+        self._calibration_failed = True
+        self.calibration_status_label.setText(text)
+        self.log.appendPlainText(text)
+        logger.info(text)
+        self._refresh_dashboard_status()
 
     @QtCore.pyqtSlot(dict)
     def _apply_ppm_calibration(self, result: dict):
@@ -5040,6 +5107,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _calibration_finished(self):
         if self._closing:
             self.calibration_worker = None
+            return
+        if self._calibration_failed:
+            self.calibration_worker = None
+            self._refresh_dashboard_status()
             return
         if self.calibration_status_label.text() == "Kalibrierung läuft...":
             self.calibration_status_label.setText("Kalibrierung beendet.")
