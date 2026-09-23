@@ -1,10 +1,41 @@
 # TETRA Decode
 
+[English documentation](README.en.md)
+
+Diese deutsch-englische Fassung ist eine **Alpha-Version**.
+
 Dieses Repository enthält eine einfache PyQt5-Anwendung, die demonstriert, wie man mit einem SDR (z.B. RTL-SDR, HackRF, LimeSDR) im Bereich von 380 bis 430 MHz nach Signalen sucht. Die stärkste Frequenz wird automatisch ausgewählt und über externe Werkzeuge wie `rtl_power` und `rtl_fm` zu Audio demoduliert. Außerdem sind die osmocom-tetra-Programme (`receiver1`, `demod_float` oder `float_to_bits`, `tetra-rx`) eingebunden, um unverschlüsselte TETRA-Kontrollkanäle zu dekodieren.
 
 Die grafische Oberfläche zeigt ein Echtzeit-Spektrum, bietet Start- und Stopp-Steuerung und gibt den empfangenen Ton über PyAudio wieder.
 
 Zusätzliche Funktionen umfassen einen Scheduler für automatische Scan- und Dekodierzyklen, eine Anzeige von Zell-Informationen mit CSV-Export, einfache Paketstatistiken, Telegram-Benachrichtigungen bei Aktivität, Audioaufnahmen und Spektrum-Screenshots. In den Einstellungen kann zwischen einem hellen und einem dunklen Design gewählt werden.
+
+## Sprache: Deutsch und Englisch
+
+Unter **Einstellungen → Sprache** kannst du zwischen **Deutsch** und
+**English** wechseln. Die Auswahl wird in `~/.tetra_gui_config.json`
+gespeichert. Ohne gespeicherte Auswahl startet die Oberfläche bei deutscher
+Systemsprache auf Deutsch, ansonsten auf Englisch.
+
+Die Sprache lässt sich auch beim Start festlegen:
+
+```powershell
+.\tetra-decode.exe --language en
+.\tetra-decode.exe --sprache de
+```
+
+Beim Start aus dem Quellcode gilt entsprechend
+`python sdr_gui.py --language en`. Der Inno-Setup-Installer
+`TETRA-Decode-Windows-Alpha-DE-EN-Setup.exe` bietet ebenfalls Deutsch und Englisch an.
+Die Sprache des Installers und die gespeicherte Sprache der Anwendung werden
+getrennt gewählt. Ausgaben externer Decoder und Installationsskripte behalten
+ihre ursprüngliche Sprache.
+
+Diese Sprachunterstützung gehört zum aktuellen Quellstand und zu daraus neu
+gebauten Paketen; ältere EXE-Dateien werden durch eine Quellcodeänderung nicht
+aktualisiert.
+
+## Programm starten
 
 Das Programm startest du mit:
 
@@ -198,3 +229,7 @@ pyinstaller --onefile --windowed --name tetra-decode sdr_gui.py
 ```
 
 Die Datei `tetra-decode.exe` findest du danach im Ordner `dist`.
+
+---
+
+© 2026 Erik Schauer, do1ffe@darc.de

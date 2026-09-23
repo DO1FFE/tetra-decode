@@ -12,3 +12,4 @@ tools/osmocom-tetra/
 tools/tetra-codec/
 installer_payload/gnuradio/
 dist-installer/TETRA-Decode-Windows-Offline-Setup.exe*
+dist-installer/TETRA-Decode-Windows-Alpha-DE-EN-Setup.exe*

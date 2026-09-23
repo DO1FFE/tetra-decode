@@ -6,6 +6,13 @@
 #endif
 #define AppPublisher "Erik Schauer"
 #define AppExeName "tetra-decode.exe"
+#define Erstellungsjahr "2026"
+#define AktuellesJahr GetDateTimeString('yyyy')
+#if AktuellesJahr == Erstellungsjahr
+#define CopyrightJahre Erstellungsjahr
+#else
+#define CopyrightJahre Erstellungsjahr + " - " + AktuellesJahr
+#endif
 #ifexist "dist\tetra-decode.exe"
 #define AppExeSource "dist\tetra-decode.exe"
 #else
@@ -20,13 +27,14 @@
 AppId={{C5E7D93E-9C2B-4B47-9A3B-54E7CBEF9B1B}
 AppName={#AppName}
 AppVersion={#AppVersion}
+AppVerName={#AppName} - Alpha
 AppPublisher={#AppPublisher}
-AppCopyright=© 2026 Erik Schauer, do1ffe@darc.de
+AppCopyright=© {#CopyrightJahre} Erik Schauer, do1ffe@darc.de
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=dist-installer
-OutputBaseFilename=TETRA-Decode-Windows-Setup
+OutputBaseFilename=TETRA-Decode-Windows-Alpha-DE-EN-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -37,21 +45,41 @@ ChangesEnvironment=yes
 CloseApplications=yes
 RestartApplications=no
 VersionInfoCompany={#AppPublisher}
-VersionInfoDescription={#AppName} Windows-Komplettpaket
+VersionInfoDescription={#AppName} Windows-Komplettpaket - Alpha
 VersionInfoProductName={#AppName}
 VersionInfoProductVersion={#AppVersion}
 VersionInfoVersion={#AppVersion}
-VersionInfoCopyright=© 2026 Erik Schauer, do1ffe@darc.de
+VersionInfoCopyright=© {#CopyrightJahre} Erik Schauer, do1ffe@darc.de
+ShowLanguageDialog=yes
 
 [Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 
+[Messages]
+BeveledLabel=© {#CopyrightJahre} Erik Schauer, do1ffe@darc.de
+
+[CustomMessages]
+english.Desktopsymbol=Create a desktop shortcut
+german.Desktopsymbol=Desktop-Verknüpfung erstellen
+english.WeitereSymbole=Additional shortcuts:
+german.WeitereSymbole=Zusätzliche Symbole:
+english.ZadigTreiber=Zadig (RTL-SDR driver)
+german.ZadigTreiber=Zadig (RTL-SDR Treiber)
+english.LaufzeitEinrichten=Setting up bundled runtime components...
+german.LaufzeitEinrichten=Gebündelte Laufzeitkomponenten werden eingerichtet...
+english.NachinstallationStartfehler=Windows post-installation could not be started.
+german.NachinstallationStartfehler=Die Windows-Nachinstallation konnte nicht gestartet werden.
+english.NachinstallationFehler=Windows post-installation finished with errors. See %ProgramData%\tetra-decode\windows-postinstall.log for details.
+german.NachinstallationFehler=Die Windows-Nachinstallation wurde mit Fehlern beendet. Details stehen in %ProgramData%\tetra-decode\windows-postinstall.log.
+
 [Tasks]
-Name: "desktopicon"; Description: "Desktop-Verknüpfung erstellen"; GroupDescription: "Zusätzliche Symbole:"; Flags: checkedonce
+Name: "desktopicon"; Description: "{cm:Desktopsymbol}"; GroupDescription: "{cm:WeitereSymbole}"; Flags: checkedonce
 
 [Files]
 Source: "{#AppExeSource}"; DestDir: "{app}"; DestName: "{#AppExeName}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "README.en.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "requirements.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "setup.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "install.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -69,7 +97,7 @@ Source: "installer_payload\gnuradio\*"; DestDir: "{commonappdata}\tetra-decode\g
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
-Name: "{autoprograms}\Zadig (RTL-SDR Treiber)"; Filename: "{commonappdata}\tetra-decode\zadig\zadig.exe"
+Name: "{autoprograms}\{cm:ZadigTreiber}"; Filename: "{commonappdata}\tetra-decode\zadig\zadig.exe"
 
 [Registry]
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{commonappdata}\tetra-decode\rtl-sdr\x64"; Check: NeedsAddPath(ExpandConstant('{commonappdata}\tetra-decode\rtl-sdr\x64')); Flags: preservestringtype
@@ -92,12 +120,12 @@ var
   ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then begin
-    WizardForm.StatusLabel.Caption := 'Gebündelte Laufzeitkomponenten werden eingerichtet...';
+    WizardForm.StatusLabel.Caption := CustomMessage('LaufzeitEinrichten');
     if not Exec('powershell.exe', PostInstallParameters(), '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then begin
-      RaiseException('Die Windows-Nachinstallation konnte nicht gestartet werden.');
+      RaiseException(CustomMessage('NachinstallationStartfehler'));
     end;
     if ResultCode <> 0 then begin
-      RaiseException('Die Windows-Nachinstallation wurde mit Fehlern beendet. Details stehen in %ProgramData%\tetra-decode\windows-postinstall.log.');
+      RaiseException(CustomMessage('NachinstallationFehler'));
     end;
   end;
 end;

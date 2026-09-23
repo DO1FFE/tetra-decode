@@ -13,7 +13,7 @@ $DistOrdner = Join-Path $ProjektWurzel 'dist'
 $InstallerOrdner = Join-Path $ProjektWurzel 'dist-installer'
 $AppExe = Join-Path $DistOrdner 'tetra-decode.exe'
 $InstallerSkript = Join-Path $ProjektWurzel 'installer.iss'
-$InstallerDatei = Join-Path $InstallerOrdner 'TETRA-Decode-Windows-Setup.exe'
+$InstallerDatei = Join-Path $InstallerOrdner 'TETRA-Decode-Windows-Alpha-DE-EN-Setup.exe'
 $PruefsummenDatei = "$InstallerDatei.sha256"
 
 function Schreibe-Schritt {
@@ -270,7 +270,7 @@ try {
     Baue-Installer
 
     $hash = (Get-FileHash -Path $InstallerDatei -Algorithm SHA256).Hash.ToLowerInvariant()
-    Set-Content -Path $PruefsummenDatei -Value "$hash  TETRA-Decode-Windows-Setup.exe" -Encoding ascii
+    Set-Content -Path $PruefsummenDatei -Value "$hash  $(Split-Path -Leaf $InstallerDatei)" -Encoding ascii
     Schreibe-Schritt "Installer fertig: $InstallerDatei"
     Schreibe-Schritt "SHA256: $hash"
 } finally {
